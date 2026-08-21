@@ -4,7 +4,7 @@ PI_AGENT_VERSION=0.84.2
 OMNIROUTE_VERSION=3.8.49
 MODELRELAY_VERSION=1.18.0
 OLLAMA_VERSION=0.32.9
-MNEMON_VERSION=0.1.17
+MNEMON_VERSION=0.2.4
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="${BASH_SOURCE[0]}"
@@ -71,7 +71,7 @@ else
 fi
 
 # Install TailScale
-sudo mkdir -p /var/run/tailscale /var/lib/tailscale && sudo curl -fsSL https://tailscale.com/install.sh | sh && sudo rm -rf /var/lib/apt/lists/*
+# sudo mkdir -p /var/run/tailscale /var/lib/tailscale && sudo curl -fsSL https://tailscale.com/install.sh | sh && sudo rm -rf /var/lib/apt/lists/*
 
 # Install mnemon
 MNEMON_ARCH=amd64
