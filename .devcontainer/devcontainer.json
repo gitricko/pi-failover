@@ -1,5 +1,5 @@
 {
-  "name": "pi-failover-devcontainer"
+  "name": "pi-failover-devcontainer",
   "customizations": {
     "vscode": {
       "extensions": [
