@@ -11,6 +11,11 @@
       "import": "./dist/index.js"
     }
   },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
   "files": [
     "dist"
   ],
