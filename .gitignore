@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build output
+dist/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Test coverage
+coverage/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local config (user-specific)
+.pi-config/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Devcontainer (optional - keep if you want to share dev environment)
+# .devcontainer/
