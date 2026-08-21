@@ -27,6 +27,27 @@ import {
 } from "@earendil-works/pi-ai";
 import { loadFallbackConfigForProvider, type FallbackConfig } from "./config.js";
 
+// Debug flag - enable via DEBUG=pi-failover or DEBUG=* environment variable
+const DEBUG = process.env.DEBUG === "*" || (process.env.DEBUG?.includes("pi-failover") ?? false);
+
+function debug(...args: unknown[]) {
+  if (DEBUG) {
+    console.log("[pi-failover:debug]", new Date().toISOString(), ...args);
+  }
+}
+
+function debugWarn(...args: unknown[]) {
+  if (DEBUG) {
+    console.warn("[pi-failover:warn]", new Date().toISOString(), ...args);
+  }
+}
+
+function debugError(...args: unknown[]) {
+  if (DEBUG) {
+    console.error("[pi-failover:error]", new Date().toISOString(), ...args);
+  }
+}
+
 /**
  * Creates a proxy for an AssistantMessageEventStream that detects first token emission.
  * Once a token is emitted, the proxy passes through all events untouched.
@@ -37,11 +58,13 @@ export function proxyFirstToken(
   onFirstToken: () => void,
   onErrorBeforeFirstToken: (error: Error) => void
 ): AssistantMessageEventStream {
+  debug("proxyFirstToken: created proxy for stream");
   const proxy = createAssistantMessageEventStream();
   let firstTokenEmitted = false;
 
   (async () => {
     try {
+      debug("proxyFirstToken: starting to consume upstream stream");
       for await (const event of stream) {
         // Check if this event represents first token emission
         if (!firstTokenEmitted) {
@@ -54,17 +77,23 @@ export function proxyFirstToken(
             event.type === "toolcall_start"
           ) {
             firstTokenEmitted = true;
+            debug("proxyFirstToken: first token emitted, type:", event.type);
             onFirstToken();
           }
         }
         proxy.push(event);
       }
+      debug("proxyFirstToken: upstream stream ended normally");
       proxy.end();
     } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      debug("proxyFirstToken: upstream error:", err.name, err.message);
       if (!firstTokenEmitted) {
-        onErrorBeforeFirstToken(error instanceof Error ? error : new Error(String(error)));
+        debug("proxyFirstToken: error before first token, calling onErrorBeforeFirstToken");
+        onErrorBeforeFirstToken(err);
       } else {
         // If error after first token, push error event to proxy
+        debug("proxyFirstToken: error after first token, pushing error event to proxy");
         const errorMessage: AssistantMessage = {
           role: "assistant",
           content: [],
@@ -80,7 +109,7 @@ export function proxyFirstToken(
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
           },
           stopReason: "error",
-          errorMessage: error instanceof Error ? error.message : String(error),
+          errorMessage: err.message,
           timestamp: Date.now(),
         };
         proxy.push({
@@ -101,8 +130,11 @@ export function proxyFirstToken(
  * Reuses Pi's error classification to match Pi's own retry behavior.
  */
 export function shouldFailover(error: Error, fallbackConfig: FallbackConfig): boolean {
+  debug("shouldFailover: checking error:", error.name, error.message);
+  
   // AbortError from our timeout -> failover
   if (error.name === "AbortError" || error.name === "CancellationError") {
+    debug("shouldFailover: AbortError/CancellationError -> true (failover)");
     return true;
   }
 
@@ -115,6 +147,7 @@ export function shouldFailover(error: Error, fallbackConfig: FallbackConfig): bo
     error.message.includes("network") ||
     error.message.includes("timeout")
   ) {
+    debug("shouldFailover: network/timeout error -> true (failover)");
     return true;
   }
 
@@ -141,16 +174,23 @@ export function shouldFailover(error: Error, fallbackConfig: FallbackConfig): bo
 
   // If it's NOT retryable by Pi's standards, we should failover
   // If it IS retryable, let Pi handle the retry
-  if (!isRetryableAssistantError(errorMessage)) {
+  const retryable = isRetryableAssistantError(errorMessage);
+  debug("shouldFailover: isRetryableAssistantError:", retryable);
+  if (!retryable) {
+    debug("shouldFailover: non-retryable by Pi -> true (failover)");
     return true;
   }
 
   // Context overflow is also non-retryable in the same way
-  if (isContextOverflow(errorMessage)) {
+  const contextOverflow = isContextOverflow(errorMessage);
+  debug("shouldFailover: isContextOverflow:", contextOverflow);
+  if (contextOverflow) {
+    debug("shouldFailover: context overflow -> true (failover)");
     return true;
   }
 
   // Otherwise it's retryable - let Pi handle it
+  debug("shouldFailover: retryable by Pi -> false (no failover)");
   return false;
 }
 
@@ -163,19 +203,25 @@ export function createFailoverWrapper(
   modelRegistry: ModelRegistry,
   fallbackConfig: FallbackConfig
 ): (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream {
+  debug("createFailoverWrapper: creating wrapper for provider:", primaryProviderId, "config:", fallbackConfig);
+  
   // Get the built-in streamSimple for any model
   // We access it through the model registry's internal runtime
   const getBuiltinStreamSimple = (model: Model<Api>) => {
+    debug("getBuiltinStreamSimple: looking for built-in streamSimple for model:", model.provider, model.id);
     // The model registry has access to the model runtime which has streamSimple
     const runtime = (modelRegistry as any).runtime;
     if (runtime?.streamSimple) {
+      debug("getBuiltinStreamSimple: found streamSimple on registry.runtime");
       return runtime.streamSimple.bind(runtime);
     }
     // Fallback: try to get from provider directly
     const provider = modelRegistry.getProvider(model.provider);
     if (provider?.streamSimple) {
+      debug("getBuiltinStreamSimple: found streamSimple on provider:", model.provider);
       return provider.streamSimple.bind(provider);
     }
+    debugError("getBuiltinStreamSimple: NO built-in streamSimple available for model:", model.provider, model.id);
     throw new Error("No built-in streamSimple available");
   };
 
@@ -184,6 +230,8 @@ export function createFailoverWrapper(
     context: Context,
     options?: SimpleStreamOptions
   ): AssistantMessageEventStream {
+    debug("failoverStreamSimple: called with model:", model.provider, model.id, "hasOptions:", !!options);
+    
     // Build candidate list: primary + fallback chain
     const primaryModel = model;
     const candidates: Array<{ model: Model<Api>; isFallback: boolean; displayName: string }> = [
@@ -199,8 +247,11 @@ export function createFailoverWrapper(
         .filter((c): c is { model: Model<Api>; isFallback: boolean; displayName: string } => c !== null),
     ];
 
+    debug("failoverStreamSimple: candidates:", candidates.map(c => `${c.displayName} (fallback=${c.isFallback})`));
+
     if (candidates.length === 1 && !candidates[0].isFallback) {
       // No fallback chain configured - pass through to primary's built-in streamSimple
+      debug("failoverStreamSimple: no fallback chain, passing through to primary");
       const builtinStreamSimple = getBuiltinStreamSimple(primaryModel);
       return builtinStreamSimple(primaryModel, context, options);
     }
@@ -210,19 +261,25 @@ export function createFailoverWrapper(
     let lastError: Error | null = null;
 
     (async () => {
+      debug("failoverStreamSimple: starting async fallback loop,", candidates.length, "candidates");
       for (let i = 0; i < candidates.length; i++) {
         const candidate = candidates[i];
         const isPrimary = !candidate.isFallback;
+        debug("failoverStreamSimple: trying candidate", i + 1, "/", candidates.length, ":", candidate.displayName, "(primary:", isPrimary, ")");
 
         // Create AbortController for this attempt
         const abortController = new AbortController();
-        const timeoutId = setTimeout(() => abortController.abort(), fallbackConfig.timeoutMs);
+        const timeoutId = setTimeout(() => {
+          debug("failoverStreamSimple: timeout fired for", candidate.displayName, "after", fallbackConfig.timeoutMs, "ms");
+          abortController.abort();
+        }, fallbackConfig.timeoutMs);
 
         // Track if we've already cleaned up abort listeners
         let abortCleanedUp = false;
         const cleanupAbortListeners = () => {
           if (abortCleanedUp) return;
           abortCleanedUp = true;
+          debug("failoverStreamSimple: cleanupAbortListeners for", candidate.displayName);
           clearTimeout(timeoutId);
         };
 
@@ -246,19 +303,23 @@ export function createFailoverWrapper(
 
           // Get built-in streamSimple for this candidate
           const builtinStreamSimple = getBuiltinStreamSimple(candidate.model);
+          debug("failoverStreamSimple: calling builtinStreamSimple for", candidate.displayName);
 
           // Try the candidate model
           const stream = await builtinStreamSimple(candidate.model, context, streamOptions);
+          debug("failoverStreamSimple: builtinStreamSimple returned stream for", candidate.displayName);
 
           // Wrap stream with first-token detection
           const wrappedStream = proxyFirstToken(
             stream,
             () => {
               // First token emitted - clear timeout, we're committed to this stream
+              debug("failoverStreamSimple: first token from", candidate.displayName, "- committing");
               cleanupAbortListeners();
             },
             (error) => {
               // Error before first token - clear timeout and continue to next candidate
+              debug("failoverStreamSimple: error before first token from", candidate.displayName, ":", error.name, error.message);
               cleanupAbortListeners();
               throw error;
             }
@@ -266,15 +327,18 @@ export function createFailoverWrapper(
 
           // Consume the wrapped stream and push to proxy
           try {
+            debug("failoverStreamSimple: consuming wrapped stream for", candidate.displayName);
             for await (const event of wrappedStream) {
               proxy.push(event);
             }
             // If we get here, the stream completed successfully
+            debug("failoverStreamSimple: stream completed successfully for", candidate.displayName);
             proxy.end();
             return;
           } catch (streamError) {
             // Stream error - check if it was before first token
             const err = streamError instanceof Error ? streamError : new Error(String(streamError));
+            debug("failoverStreamSimple: stream error for", candidate.displayName, ":", err.name, err.message);
             cleanupAbortListeners();
             
             if (i < candidates.length - 1 && shouldFailover(err, fallbackConfig)) {
@@ -282,13 +346,15 @@ export function createFailoverWrapper(
               if (fallbackConfig.notifyOnSwitch) {
                 const fromName = candidates[i].displayName;
                 const toName = candidates[i + 1].displayName;
-                console.warn(`⚠ failover: ${fromName} → ${toName} (${err.name}: ${err.message})`);
+                debugWarn("⚠ failover:", fromName, "→", toName, "(", err.name, ":", err.message, ")");
               }
               lastError = err;
+              debug("failoverStreamSimple: will try next candidate");
               continue; // Try next candidate
             }
 
             // Don't failover - re-throw via proxy
+            debug("failoverStreamSimple: not failing over, pushing error to proxy");
             lastError = err;
             const errorMessage: AssistantMessage = {
               role: "assistant",
@@ -320,6 +386,7 @@ export function createFailoverWrapper(
           cleanupAbortListeners();
 
           const err = error instanceof Error ? error : new Error(String(error));
+          debug("failoverStreamSimple: caught error for", candidate.displayName, ":", err.name, err.message);
           lastError = err;
 
           // Check if we should failover to next candidate
@@ -328,12 +395,14 @@ export function createFailoverWrapper(
             if (fallbackConfig.notifyOnSwitch) {
               const fromName = candidates[i].displayName;
               const toName = candidates[i + 1].displayName;
-              console.warn(`⚠ failover: ${fromName} → ${toName} (${err.name}: ${err.message})`);
+              debugWarn("⚠ failover:", fromName, "→", toName, "(", err.name, ":", err.message, ")");
             }
+            debug("failoverStreamSimple: will try next candidate after catch");
             continue; // Try next candidate
           }
 
           // Don't failover - re-throw via proxy
+          debug("failoverStreamSimple: not failing over after catch, pushing error to proxy");
           const errorMessage: AssistantMessage = {
             role: "assistant",
             content: [],
@@ -363,6 +432,7 @@ export function createFailoverWrapper(
       }
 
       // All candidates exhausted - push final error
+      debugError("failoverStreamSimple: ALL candidates exhausted");
       const finalError = lastError || new Error("All fallback candidates exhausted");
       const errorMessage: AssistantMessage = {
         role: "assistant",
@@ -402,49 +472,65 @@ export function createFailoverWrapper(
  * that implements the failover logic.
  */
 export default async function (pi: ExtensionAPI) {
+  debug("pi-failover extension loaded!");
+  
   // Helper to wrap a provider with failover if it has fallback config
   // This runs inside session_start handler where we have access to ExtensionContext
   const wrapProviderIfNeeded = async (ctx: ExtensionContext, providerId: string) => {
+    debug("wrapProviderIfNeeded: checking provider:", providerId);
     const modelRegistry = ctx.modelRegistry;
     const fallbackConfig = loadFallbackConfigForProvider(providerId, modelRegistry);
+    debug("wrapProviderIfNeeded: fallback config for", providerId, ":", fallbackConfig);
     
     if (fallbackConfig.chain.length === 0) {
+      debug("wrapProviderIfNeeded: no fallback chain for", providerId, "- skipping");
       return; // No fallback chain for this provider
     }
 
     // Check if this provider has any models
     const allModels = modelRegistry.getAll();
+    debug("wrapProviderIfNeeded: all models in registry:", allModels.length);
     const providerModels = allModels.filter(m => m.provider === providerId);
+    debug("wrapProviderIfNeeded: models for provider", providerId, ":", providerModels.map(m => m.id));
     if (providerModels.length === 0) {
+      debug("wrapProviderIfNeeded: no models for provider", providerId, "- skipping");
       return; // No models to wrap
     }
 
     // Get the existing provider config (built-in + models.json + any previous extension config)
     const existingConfig = modelRegistry.getRegisteredProviderConfig(providerId);
-    
+    debug("wrapProviderIfNeeded: existing config for", providerId, ":", !!existingConfig);
+
     // Create the failover wrapper
     const failoverStreamSimple = createFailoverWrapper(providerId, modelRegistry, fallbackConfig);
+    debug("wrapProviderIfNeeded: created failover wrapper for", providerId);
 
     // Re-register the provider with our wrapped streamSimple
     // We preserve all existing config and just replace streamSimple
+    debug("wrapProviderIfNeeded: re-registering provider", providerId, "with failover streamSimple");
     pi.registerProvider(providerId, {
       ...existingConfig,
       streamSimple: failoverStreamSimple,
     });
+    debug("wrapProviderIfNeeded: provider", providerId, "wrapped successfully!");
   };
 
   // On session start, check all providers for fallback config and wrap them
   pi.on("session_start", async (event, ctx: ExtensionContext) => {
+    debug("session_start event received!");
     const modelRegistry = ctx.modelRegistry;
     const providerIds = modelRegistry.getRegisteredProviderIds?.() ?? [];
+    debug("session_start: registered provider IDs:", providerIds);
     
     for (const providerId of providerIds) {
+      debug("session_start: processing provider:", providerId);
       await wrapProviderIfNeeded(ctx, providerId);
     }
   });
 
   // Clean up status on shutdown
   pi.on("session_shutdown", async (event, ctx: ExtensionContext) => {
+    debug("session_shutdown event received");
     // ExtensionContext has UI access
     if (ctx.ui) {
       ctx.ui.setStatus("failover", undefined);
