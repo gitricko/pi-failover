@@ -1,0 +1,20 @@
+{
+  "providers": {
+    "omniroute": {
+      "baseUrl": "http://localhost:20128/v1",
+      "api": "openai-completions",
+      "apiKey": "no-key-needed",
+      "models": [
+        { "id": "auto-fastest" }
+      ]
+    },
+    "modelrelay": {
+      "baseUrl": "http://localhost:7352/v1",
+      "api": "openai-completions",
+      "apiKey": "no-key-needed",
+      "models": [
+        { "id": "auto-fastest" }
+      ]
+    }
+  }
+}

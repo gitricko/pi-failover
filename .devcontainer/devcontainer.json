@@ -1,0 +1,11 @@
+{
+  "name": "pi-failover-devcontainer"
+  "customizations": {
+    "vscode": {
+      "extensions": [
+      ]
+    }
+  },
+  "postCreateCommand": "bash ./.devcontainer/install.sh   >> /tmp/pi-install.log 2>&1",
+  "postStartCommand":  "bash ./.devcontainer/codespace-cleanup.sh >> /tmp/hermes-codespace.log 2>&1; bash ./.devcontainer/start-hermes.sh >> /tmp/hermes-codespace.log 2>&1"
+}
