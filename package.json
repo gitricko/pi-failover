@@ -1,0 +1,44 @@
+{
+  "name": "@gitricko/pi-failover",
+  "version": "0.1.0",
+  "description": "True Hermes-style request-time model failover for Pi",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "clean": "shx rm -rf dist",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "^0.84.2",
+    "@earendil-works/pi-coding-agent": "^0.84.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.4",
+    "shx": "^0.4.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "keywords": [
+    "pi",
+    "failover",
+    "model",
+    "fallback",
+    "hermes"
+  ],
+  "author": "gitricko",
+  "license": "MIT"
+}

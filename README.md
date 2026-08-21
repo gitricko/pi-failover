@@ -8,6 +8,8 @@ This is **not** a post-run recovery tool. It is a transport-level, request-time 
 
 > Status: pre-release / design-locked. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design, the comparison with existing approaches, and the proof strategy.
 
+---
+
 ## The problem
 
 Pi's built-in retry handles transient errors (429, 5xx) with exponential backoff, but when a provider **hangs** (no first token) or returns a **non-retryable** error, the agent either stalls or stops. You have to manually switch models.
@@ -17,6 +19,8 @@ Existing community tools only recover *after* the run ends:
 - [`cad0p/pi-fallback-provider`](https://github.com/cad0p/pi-fallback-provider) hooks `agent_end` + a 20s progress timer, then `setModel` + sends `"continue"`. Useful as a safety net, but it is **post-run**, not request-time, and cannot preserve the in-flight request.
 
 `pi-failover` closes that gap: it fails over **inside the stream call**, before any user-visible stall.
+
+---
 
 ## How it works (summary)
 
@@ -38,16 +42,25 @@ Key properties:
 
 - **Same `Context`.** The fallback reuses Pi's own `streamSimple` with the verbatim `Context`/`options`. Tool definitions, history, and thinking level are identical.
 - **Pre-first-token only.** Once the primary emits any token, the stream is passed through untouched — so a fallback never causes duplicate tool calls or partial-duplicate output.
-- **Reuses Pi's error classification.** We import `isRetryableAssistantError` / `isContextOverflow` from `@earendil-works/pi-ai/compat`, so we fail over on the *same* conditions Pi would treat as terminal, and let Pi retry on the *same* conditions it would retry.
+- **Reuses Pi's error classification.** We import `isRetryableAssistantError` / `isContextOverflow` from `@earendil-works/pi-ai`, so we fail over on the *same* conditions Pi would treat as terminal, and let Pi retry on the *same* conditions it would retry.
 - **Gateway-free.** No OpenRouter/Vercel routing required.
+
+---
 
 ## Install
 
 ```bash
-pi install git:github.com/<you>/pi-failover@main
-# or, once published:
-pi install npm:@<you>/pi-failover
+# From local source (development)
+pi install . --local --approve
+
+# From Git (once published)
+pi install git:github.com/gitricko/pi-failover@main
+
+# From npm (once published)
+pi install npm:@gitricko/pi-failover
 ```
+
+---
 
 ## Configuration
 
@@ -77,13 +90,105 @@ Add a `fallback` block to a provider in `~/.pi/agent/models.json`:
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the complete algorithm, the `Context`/`streamSimple` contract, and the verification strategy that proves behavioral equivalence with Hermes.
 
-## Verification / "is this really Hermes?"
+---
 
-We prove equivalence three ways (see `test/`):
+## Development
 
-1. **Structural** — assert the fallback calls Pi's own `model-runtime.streamSimple(fallbackModel, sameCtx, sameOpts)` by reference. No custom HTTP/serialization.
-2. **Differential** — run the same task against our extension and a reference Hermes controller; assert byte-identical token/tool/final-output streams and `ctx === ctx'`.
-3. **Fault-injection matrix** — primary timeout / 500 / 429 / partial-then-die / all-fail, each asserting the exact same observable (`stopReason`, `errorMessage`, token count, tool calls) as a Hermes reference.
+### Prerequisites
+
+- Node.js ≥ 22.19.0
+- Pi CLI (`@earendil-works/pi-coding-agent`) 0.84.2+
+
+### Install dependencies
+
+```bash
+npm ci
+```
+
+### Build
+
+```bash
+npm run build
+```
+
+Outputs to `dist/`:
+- `index.js` / `index.d.ts` — main extension entry point
+- `config.js` / `config.d.ts` — configuration types & loader
+
+### Test
+
+```bash
+# Run all tests (25 tests)
+npx vitest run
+
+# Run with verbose output
+npx vitest run --reporter=verbose
+
+# Watch mode
+npx vitest
+```
+
+**Test coverage (25 tests):**
+
+| Suite | Tests | Coverage |
+|-------|-------|----------|
+| Config loading | 8 | Defaults, parse/merge, registry loading |
+| Error classification (`shouldFailover`) | 6 | AbortError, network errors, timeout, 429 (retryable), 400 (non-retryable), context overflow |
+| First-token detection (`proxyFirstToken`) | 4 | `text_delta`, `thinking_start`, `toolcall_start`, error-after-token |
+| Fallback chain (`createFailoverWrapper`) | 2 | No-fallback passthrough, timeout→fallback switch |
+| Config integration | 2 | Chain parsing, registry loading |
+
+### Type check
+
+```bash
+npx tsc -p tsconfig.json --noEmit
+```
+
+### Lint (if configured)
+
+```bash
+npx eslint src/ test/
+```
+
+### Full local verification (matches CI)
+
+```bash
+npx tsc -p tsconfig.json --noEmit && npx vitest run && npm run build
+```
+
+---
+
+## CI / GitHub Actions
+
+The project includes a CI workflow at `.github/workflows/ci.yml` with three jobs:
+
+| Job | Runs | Description |
+|-----|------|-------------|
+| `lint` | Every push/PR | TypeScript `--noEmit`, ESLint (if configured) |
+| `test` | Every push/PR | `vitest run --reporter=verbose` (25 tests) |
+| `build` | After lint+test pass | `npm run build`, verifies `dist/` output |
+| `integration` | Manual (disabled) | Optional Pi CLI integration test |
+
+---
+
+## Architecture
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for:
+
+- Problem statement & comparison table
+- Architecture diagram (ASCII)
+- Core algorithm (pseudocode)
+- Configuration schema
+- **Proof of equivalence with Hermes** (4 methods):
+  - (A) Structural — same code path by reference
+  - (B) Differential — byte-identical token/tool/final streams
+  - (C) Fault-injection matrix — 5 scenarios
+  - (D) Observability — status lines & counters
+- Risks & mitigations
+- Comparison with `cad0p/pi-fallback-provider`
+- Build plan
+
+---
 
 ## License
 
