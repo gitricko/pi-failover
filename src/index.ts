@@ -96,7 +96,9 @@ export function proxyFirstToken(
           const err = new Error(event.error?.errorMessage ?? "pre-first-token error event");
           err.name = event.error?.stopReason === "aborted" ? "AbortError" : "ProviderError";
           onErrorBeforeFirstToken(err);
-          // Do NOT forward the terminal error event — caller decides next step
+          // Forward the terminal error event so the consumer's for-await completes
+          proxy.push(event);
+          proxy.end();
           return;
         }
         // Check if this event represents first token emission
