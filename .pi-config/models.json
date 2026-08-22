@@ -6,7 +6,13 @@
       "apiKey": "no-key-needed",
       "models": [
         { "id": "auto-fastest" }
-      ]
+      ],
+      "fallback": {
+        "chain": ["modelrelay/auto-fastest"],
+        "timeoutMs": 30000,
+        "onlyPreFirstToken": true,
+        "notifyOnSwitch": true
+      }
     },
     "modelrelay": {
       "baseUrl": "http://localhost:7352/v1",
@@ -14,7 +20,13 @@
       "apiKey": "no-key-needed",
       "models": [
         { "id": "auto-fastest" }
-      ]
+      ],
+      "fallback": {
+        "chain": ["omniroute/auto-fastest"],
+        "timeoutMs": 30000,
+        "onlyPreFirstToken": true,
+        "notifyOnSwitch": true
+      }
     }
   }
 }

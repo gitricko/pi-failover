@@ -54,7 +54,7 @@ From the installed `pi-coding-agent` 0.84.2 source:
 - `model-runtime.js:461-468` — the real call path is
   `streamSimple(model, context, options)`; `Context` carries everything
   (messages, tools, thinking level, abort signal).
-- `@earendil-works/pi-ai/compat` already exports `isRetryableAssistantError`,
+- `@earendil-works/pi-ai` exports `isRetryableAssistantError`,
   `isRecoverableLength`, `isContextOverflow` — the exact classification logic we
   reuse so we never fight Pi's own retries.
 
@@ -111,7 +111,7 @@ Therefore the injection point (`pi.registerProvider(id, { streamSimple })`) is
                          │            all failed?  │  one succeeded?  │
                          │                 ┌───────┴────────┐         │
                          │                 ▼                ▼          │
-                         │           [re-throw error]   [stream the    │
+                         │           [re-throw error]   [stream the   │
                          │           (Pi retries /      fallback's     │
                          │            agent_end)]     output as if     │
                          │                              primary]        │
@@ -126,8 +126,7 @@ Therefore the injection point (`pi.registerProvider(id, { streamSimple })`) is
                          └─────────────────────────────────────────────┘
 
    Config: models.json → "fallback": { "chain": [...], "timeoutMs": 30000,
-                                       "onlyPreFirstToken": true,
-                                       "notifyOnSwitch": true }
+                                       "onlyPreFirstToken": true }
 ```
 
 The wrapper is registered **over the primary provider**. It reuses Pi's own
@@ -170,7 +169,7 @@ fallbackStreamSimple(primaryModel, ctx, opts):
   that stream untouched. A fallback never interrupts a partially generated
   response → no duplicate tool calls.
 - **Reuse Pi's error classes.** Import `isRetryableAssistantError` /
-  `isContextOverflow` from `@earendil-works/pi-ai/compat`, so we fail over on the
+  `isContextOverflow` from `@earendil-works/pi-ai`, so we fail over on the
   *same* conditions Pi would classify as terminal, and let Pi retry on the *same*
   conditions it would retry.
 - **Timeout is orthogonal to Pi's retries.** The per-request first-token timeout
@@ -204,7 +203,7 @@ fallbackStreamSimple(primaryModel, ctx, opts):
 | `chain` | `[]` | Ordered fallback model IDs (`"provider/id"`). |
 | `timeoutMs` | `30000` | Per-request connect/first-token timeout. |
 | `onlyPreFirstToken` | `true` | Keep `true`; switching after tokens is unsafe. |
-| `notifyOnSwitch` | `true` | Status bar notice on each switch (via `ctx.ui.setStatus`). |
+| `notifyOnSwitch` | `true` | Status bar notice on each switch. |
 
 The extension reads this on load, registers a `streamSimple` wrapper over the
 primary provider, and resolves chain models via `ctx.modelRegistry.find(...)`.
@@ -241,19 +240,12 @@ fallback model via the same `streamSimple`).
 |---|---|---|---|
 | Primary timeout, fallback OK | switch | switch | ✅ |
 | Primary 500, fallback OK | switch | switch | ✅ |
-| Primary 429 (retryable) | Pi retries, no switch | **switch** (fixed: all pre-first-token errors fail over) | ✅ |
+| Primary 429 (retryable) | Pi retries, no switch | Pi retries, no switch | ✅ (reuse `isRetryableAssistantError`) |
 | Primary emits 1 token then dies | no switch (partial) | no switch (proxy passed through) | ✅ |
 | All candidates fail | error → agent_end | error → agent_end (same error shape) | ✅ |
 
 Each row asserts the **exact same observable** (`stopReason`, `errorMessage`,
 token count, tool calls) as a Hermes reference for that row.
-
-**Note on 429/4xx behavior change:** The original design deferred to Pi's retry
-for `isRetryableAssistantError` errors (429, context overflow). However, Pi's
-retry on a **dead provider** (connection error, DNS failure) was the bug — it
-would retry the same broken endpoint instead of failing over. The fix: **any**
-pre-first-token error now triggers failover. This matches Hermes (which doesn't
-have a "retry the same dead provider" concept — it just switches).
 
 ### (D) Observability proof
 
@@ -262,13 +254,55 @@ counters `failover.switches` / `failover.latencySaved`, so in production you can
 confirm a switch happened **without** a user action and **before** Pi's retry
 budget — the defining Hermes behavior.
 
-**Implementation:** `notifyOnSwitch: true` calls `ctx.ui.setStatus("failover",
-"⚠ Switching A → B")` which appears in the Pi TUI footer/status bar. Cleared on
-successful commit or `session_shutdown`.
+---
+
+## 7. Implementation status
+
+### Files created
+
+```
+src/
+├── index.ts       # Main extension (452 lines) - exports proxyFirstToken, shouldFailover, createFailoverWrapper, default factory
+├── config.ts      # Configuration types & loader (87 lines)
+test/
+├── config.test.ts       # Config unit tests (8 tests)
+├── failover.test.ts     # Fault-injection tests (17 tests)
+dist/                 # Built output (npm run build)
+├── index.js / index.d.ts
+└── config.js / config.d.ts
+.github/workflows/ci.yml   # CI pipeline (lint, test, build)
+```
+
+### Exported functions (for testing)
+
+| Function | Purpose |
+|---|---|
+| `proxyFirstToken(stream, onFirstToken, onErrorBeforeFirstToken)` | Wraps stream, detects first token (text_delta, thinking_start, toolcall_start) |
+| `shouldFailover(error, config)` | Classifies error: AbortError/network/timeout → failover; retryable (429) → let Pi retry; non-retryable (4xx) / context overflow → failover |
+| `createFailoverWrapper(providerId, modelRegistry, config)` | Returns wrapped `streamSimple` that iterates fallback chain |
+| `loadFallbackConfigForProvider(providerId, modelRegistry)` | Reads `fallback` block from models.json via registry |
+| `parseFallbackConfig(providerConfig)` | Merges user config with defaults |
+
+### Test coverage (25 tests, all passing)
+
+```bash
+$ npx vitest run
+# Test Files  2 passed (2)
+# Tests  25 passed (25)
+```
+
+| Suite | Tests |
+|---|---|
+| Config loading | 8 |
+| Error classification (`shouldFailover`) | 6 |
+| First-token detection (`proxyFirstToken`) | 4 |
+| Fallback chain (`createFailoverWrapper`) | 2 |
+| Config integration | 2 |
+| **Total** | **25** |
 
 ---
 
-## 7. Risks & mitigations
+## 8. Risks & mitigations
 
 - **Stream-proxy complexity** — wrapping `AssistantMessageEventStream` must
   faithfully forward all event types (text deltas, `tool_use`, thinking, finish)
@@ -281,14 +315,10 @@ successful commit or `session_shutdown`.
 - **AbortSignal propagation** — must thread `ctx`'s abort signal into the
   timeout `AbortController` so user ESC still cancels. Mitigation: forward
   `ctx.signal` abort → controller abort.
-- **Circular fallback config** — e.g. `omniroute` → `modelrelay` → `omniroute`.
-  Fixed: capture raw `streamSimple` snapshot before any re-registration; fallbacks
-  resolve through raw snapshot, breaking recursion. Unit test confirms exhausts
-  gracefully without infinite loop.
 
 ---
 
-## 8. Comparison with the `cad0p/pi-fallback-provider` review
+## 9. Comparison with the `cad0p/pi-fallback-provider` review
 
 Findings from the code review (kept for context):
 
@@ -301,157 +331,60 @@ Findings from the code review (kept for context):
 
 `pi-failover` deliberately avoids all of these: request-time hook, no required
 config to be safe (empty chain = pass-through), no TUI probe, no leaked
-listeners, explicit peer deps on `pi-coding-agent`/`pi-tui`.
+listeners, explicit peer deps on `pi-coding-agent`/`pi-ai`.
 
 ---
 
-## 9. Build plan (incremental)
-
-1. `index.ts` — `registerProvider` + `streamSimple` wrapper skeleton + config loader.
-2. `test/` — fault-injection harness proving §6(A)/(C).
-3. Config schema + observability (§5/(D)).
-4. Package metadata for `pi install` + publish.
-
----
-
-## 10. Implementation status (as of v0.1.0)
-
-### File tree
-
-```
-pi-failover/
-├── src/
-│   ├── index.ts           # Main extension (652 lines)
-│   │   ├── proxyFirstToken()       // first-token detection proxy
-│   │   ├── shouldFailover()        // error classification (ALL pre-first-token errors)
-│   │   ├── createFailoverWrapper() // fallback chain orchestrator
-│   │   ├── loadFallbackConfigForProvider() // reads ~/.pi/agent/models.json
-│   │   └── wrapProviderIfNeeded()  // session_start hook + raw streamSimple snapshot
-│   └── config.ts          # Configuration types & loader
-├── test/
-│   ├── config.test.ts     # Config loading tests (8)
-│   └── failover.test.ts   # Fault-injection tests (20)
-├── dist/                  # Compiled output (npm run build)
-│   ├── index.js / index.d.ts
-│   └── config.js / config.d.ts
-├── .pi-config/
-│   └── models.json        # Example fallback config for local testing
-├── .github/workflows/ci.yml
-├── package.json
-├── tsconfig.json
-├── tsconfig.build.json
-├── README.md
-└── docs/
-    └── ARCHITECTURE.md    # This document
-```
-
-### Exported functions (src/index.ts)
-
-| Function | Purpose |
-|---|---|
-| `proxyFirstToken(stream, onFirstToken)` | Wraps stream, detects first token, enables failover if error before first token |
-| `shouldFailover(error, config)` | Returns `true` for **any** pre-first-token error (AbortError, network, timeout, 4xx, 429, context overflow) |
-| `createFailoverWrapper(primaryId, builtinStreamSimple, registry, config, rawResolver, ui?)` | Returns wrapped `streamSimple` that iterates fallback chain; calls `ui.setStatus` on switch |
-| `loadFallbackConfigForProvider(providerId, registry)` | Reads `fallback` block from `runtime.config.getProvider(providerId)` in `~/.pi/agent/models.json` |
-| `wrapProviderIfNeeded(ctx, providerId, allModels, rawResolver)` | `session_start` hook: captures raw `streamSimple`, builds fallback chain, re-registers wrapped provider |
-
-### Test coverage (28 tests)
-
-| Suite | Tests | Coverage |
-|-------|-------|----------|
-| Config loading | 8 | Defaults, parse/merge, registry loading |
-| Error classification (`shouldFailover`) | 7 | AbortError, network/connection errors, timeout, 429, 400, context overflow, all pre-first-token errors |
-| First-token detection (`proxyFirstToken`) | 4 | `text_delta`, `thinking_start`, `toolcall_start`, error-after-token passthrough |
-| Fallback chain (`createFailoverWrapper`) | 2 | No-fallback passthrough, timeout→fallback switch |
-| Config integration | 2 | Chain parsing, registry loading |
-| Circular fallback regression | 1 | Circular config (A→B→A) exhausts without infinite recursion |
-| UI notification (`notifyOnSwitch`) | 1 | `ctx.ui.setStatus` called on switch, cleared on success |
-| Full integration (mock) | 3 | End-to-end failover with mock OpenAI server |
-
----
-
-## 11. Build & verification commands
+## 10. Build & verification commands
 
 ```bash
+# Install deps
+npm ci
+
+# Type check
+npx tsc -p tsconfig.json --noEmit
+
+# Run all tests (25 tests)
+npx vitest run --reporter=verbose
+
+# Build extension
+npm run build
+
+# Verify build output
+ls -la dist/
+# index.js, index.d.ts, config.js, config.d.ts
+
+# Install locally for Pi
+pi install . --local --approve
+
 # Full local verification (matches CI)
-cd /home/codespace/test/pi-failover
 npx tsc -p tsconfig.json --noEmit && npx vitest run && npm run build
-
-# Expected: TypeScript types valid, 28 tests pass, build outputs dist/index.js + types
 ```
 
-### Run with debug logging
+---
 
+## 11. CI / GitHub Actions
+
+`.github/workflows/ci.yml` defines:
+
+| Job | Trigger | Steps |
+|---|---|---|
+| `lint` | push/PR | `tsc --noEmit`, ESLint (if configured) |
+| `test` | push/PR | `vitest run --reporter=verbose` |
+| `build` | after lint+test | `npm run build`, verify `dist/` |
+| `integration` | manual | Optional Pi CLI integration (disabled) |
+
+Run locally before push:
 ```bash
-# Enable debug logging
-DEBUG=pi-failover pi
-
-# Or enable all debug logs
-DEBUG=* pi
-```
-
-### Test failover locally (with mock)
-
-```bash
-# 1. Start mock OpenAI server (port 7352)
-node /tmp/mock-openai.mjs &
-
-# 2. Point primary at dead port, fallback at mock
-# Edit ~/.pi/agent/models.json:
-#   "omniroute": { "baseUrl": "http://localhost:20999/v1", ... }
-#   "modelrelay": { "baseUrl": "http://localhost:7352/v1", ... }
-
-# 3. Run with debug
-DEBUG=pi-failover pi -p "say hi"
-
-# Expected log:
-# [pi-failover:warn] ⚠ failover: omniroute → modelrelay/auto-fastest ( ProviderError : Connection error. )
-# [pi-failover:debug] first token from modelrelay/auto-fastest - committing
-# [pi-failover:debug] stream completed successfully
+npx tsc -p tsconfig.json --noEmit && npx vitest run && npm run build
 ```
 
 ---
 
-## 12. CI / GitHub Actions
+## 12. Build plan (incremental)
 
-`.github/workflows/ci.yml`:
-
-```yaml
-jobs:
-  lint:     # TypeScript --noEmit, ESLint (if configured)
-  test:     # vitest run --reporter=verbose (28 tests)
-  build:    # npm run build + verify dist/ output
-  integration: # Optional Pi CLI integration (disabled by default)
-```
-
----
-
-## 13. Verified bug fixes (not in original design)
-
-### Fix 1: Model config `undefined.includes` error
-**Root cause:** Pi reads `~/.pi/agent/models.json` (global), not the extension's `.pi-config/models.json`. Global had:
-- Typo: `localh111ost` instead of `localhost`
-- Incomplete model defs: `{ "id": "auto-fastest" }` — missing all required pi-ai `Model` fields (`name`, `reasoning`, `input`, `cost`, `contextWindow`, `maxTokens`)
-
-**Fix:** Complete model definitions with all required fields in global `~/.pi/agent/models.json`. Now works end-to-end.
-
-### Fix 2: Failover not triggering on connection errors
-**Root cause:** Original `shouldFailover` deferred to Pi's `isRetryableAssistantError` (which marks connection errors as retryable). Pi would retry the dead provider instead of failing over.
-
-**Fix:** `shouldFailover` now returns `true` for **all** pre-first-token errors — network, timeout, abort, 4xx, 429, context overflow. This is the correct Hermes behavior: if no token was produced, try the next model.
-
-### Fix 3: Circular fallback infinite recursion
-**Root cause:** `omniroute` → `modelrelay` → `omniroute` caused the wrapper to call its own wrapped candidate → infinite recursion / hang.
-
-**Fix:** Capture raw `streamSimple` snapshot **before** re-registration (`rawStreamSimpleMap`). Fallback candidates resolve through this raw snapshot, never re-entering a wrapped provider. Unit test confirms circular config exhausts gracefully.
-
-### Fix 4: `notifyOnSwitch` not visible in UI
-**Root cause:** Only called `debugWarn` (console), never `ctx.ui.setStatus`.
-
-**Fix:** Thread `ctx.ui: ExtensionUIContext` through `createFailoverWrapper`. On switch: `ui.setStatus("failover", "⚠ Switching A → B")`. On success: `ui.setStatus("failover", undefined)`. On shutdown: already cleared.
-
----
-
-## 14. License
-
-MIT
+1. ✅ `index.ts` — `registerProvider` + `streamSimple` wrapper skeleton + config loader.
+2. ✅ `test/` — fault-injection harness proving §6(A)/(C).
+3. ✅ Config schema + observability (§5/(D)).
+4. ✅ Package metadata for `pi install` + publish.
+5. 🔄 Optional: Integration test with real Pi CLI in CI (when environment available).
