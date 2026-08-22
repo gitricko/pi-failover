@@ -9,6 +9,7 @@
 import type {
   ExtensionAPI,
   ExtensionContext,
+  ExtensionUIContext,
   ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
 import type {
@@ -244,7 +245,8 @@ export function createFailoverWrapper(
   builtinStreamSimple: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>,
   modelRegistry: ModelRegistry,
   fallbackConfig: FallbackConfig,
-  rawStreamSimple: (providerId: string) => ((model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>) | undefined
+  rawStreamSimple: (providerId: string) => ((model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>) | undefined,
+  ui?: ExtensionUIContext
 ): (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream {
   debug("createFailoverWrapper: creating wrapper for provider:", primaryProviderId, "config:", fallbackConfig);
   
@@ -426,6 +428,8 @@ export function createFailoverWrapper(
             }
           }
           debug("failoverStreamSimple: stream completed successfully for", candidate.displayName);
+          // Successfully committed to a candidate — clear any failover status.
+          if (ui) ui.setStatus("failover", undefined);
           proxy.end();
           return;
         } catch (streamError) {
@@ -439,6 +443,11 @@ export function createFailoverWrapper(
               const fromName = candidates[i].displayName;
               const toName = candidates[i + 1].displayName;
               debugWarn("⚠ failover:", fromName, "→", toName, "(", err.name, ":", err.message, ")");
+              // Surface the switch in the Pi UI status bar / footer.
+              // Key "failover" is cleared on session_shutdown (and below on success).
+              if (ui) {
+                ui.setStatus("failover", `⚠ Switching ${fromName} → ${toName}`);
+              }
             }
             lastError = err;
             debug("failoverStreamSimple: will try next candidate");
@@ -568,7 +577,7 @@ export default async function (pi: ExtensionAPI) {
     const existingConfig = modelRegistry.getRegisteredProviderConfig(providerId);
 
     // Create the failover wrapper bound to the CAPTURED built-in path
-    const failoverStreamSimple = createFailoverWrapper(providerId, builtinStreamSimple, modelRegistry, fallbackConfig, rawStreamSimple);
+    const failoverStreamSimple = createFailoverWrapper(providerId, builtinStreamSimple, modelRegistry, fallbackConfig, rawStreamSimple, ctx.ui);
     debug("wrapProviderIfNeeded: created failover wrapper for", providerId);
 
     // Re-register with explicit api (required by validateExtensionProvider when
