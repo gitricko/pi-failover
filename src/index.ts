@@ -534,7 +534,8 @@ export default async function (pi: ExtensionAPI) {
   const wrapProviderIfNeeded = async (ctx: ExtensionContext, providerId: string) => {
     debug("wrapProviderIfNeeded: checking provider:", providerId);
     const modelRegistry = ctx.modelRegistry;
-    const fallbackConfig = loadFallbackConfigForProvider(providerId, modelRegistry);
+    // Cast to access private runtime.config.getProvider for models.json fallback config
+    const fallbackConfig = loadFallbackConfigForProvider(providerId, modelRegistry as any);
     debug("wrapProviderIfNeeded: fallback config for", providerId, ":", fallbackConfig);
     
     if (fallbackConfig.chain.length === 0) {

@@ -81,8 +81,22 @@ export function parseFallbackConfig(providerConfig: FallbackProviderConfig): Fal
  */
 export function loadFallbackConfigForProvider(
   providerId: string,
-  modelRegistry: { getRegisteredProviderConfig: (id: string) => ProviderConfigInput | undefined }
+  modelRegistry: { 
+    getRegisteredProviderConfig: (id: string) => ProviderConfigInput | undefined;
+    runtime?: { config?: { getProvider: (id: string) => FallbackProviderConfig | undefined } }
+  }
 ): FallbackConfig {
-  const providerConfig = modelRegistry.getRegisteredProviderConfig(providerId) as FallbackProviderConfig | undefined;
-  return parseFallbackConfig(providerConfig ?? {} as FallbackProviderConfig);
+  // First check extension-registered config
+  const extensionConfig = modelRegistry.getRegisteredProviderConfig(providerId) as FallbackProviderConfig | undefined;
+  
+  // Then check models.json config via runtime.config.getProvider
+  const modelsJsonConfig = modelRegistry.runtime?.config?.getProvider?.(providerId);
+  
+  // Merge: models.json config takes precedence for fallback
+  const mergedConfig: FallbackProviderConfig = {
+    ...(extensionConfig ?? {}),
+    ...(modelsJsonConfig ?? {}),
+  };
+  
+  return parseFallbackConfig(mergedConfig);
 }
