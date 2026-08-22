@@ -89,6 +89,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     timeout-minutes: 10
+    env:
+      # Use a consistent HOME for Pi installation and test execution
+      PITEST_HOME: ${{ runner.temp }}/pi-test-home
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -104,6 +107,10 @@ jobs:
       - name: Build extension
         run: npm run build
 
+      - name: Prepare test home directory
+        run: |
+          mkdir -p "$PITEST_HOME/.pi/agent"
+
       - name: Install Pi CLI
         run: |
           # Install Pi CLI from npm
@@ -111,12 +118,9 @@ jobs:
 
       - name: Install extension locally
         run: |
-          pi install . --local --approve
+          HOME="$PITEST_HOME" pi install . --local --approve
 
       - name: Run integration tests
         run: |
           chmod +x scripts/integration-test.sh
-          ./scripts/integration-test.sh
-        env:
-          # Ensure clean environment
-          HOME: ${{ runner.temp }}
+          HOME="$PITEST_HOME" ./scripts/integration-test.sh

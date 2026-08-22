@@ -86,10 +86,21 @@ EOF
 
 log "Configured Pi with models.json"
 
+# Register the extension in GLOBAL agent settings ($HOME/.pi/agent/settings.json).
+# Pi only loads project-level .pi/settings.json packages from TRUSTED directories,
+# and trust prompts don't work in non-interactive (-p) mode — so use global scope.
+SETTINGS_JSON="${HOME}/.pi/agent/settings.json"
+mkdir -p "$(dirname "${SETTINGS_JSON}")"
+cat > "${SETTINGS_JSON}" <<EOF
+{
+  "packages": ["${PROJECT_ROOT}"]
+}
+EOF
+
 # Test 1: Primary succeeds (no failover)
 log "Test 1: Primary succeeds (no failover)"
 cd /tmp
-OUTPUT=$(DEBUG=pi-failover timeout 30 pi -p "test primary success" 2>&1 || true)
+OUTPUT=$(DEBUG=pi-failover timeout 30 pi --provider ci-primary --model auto -p "test primary success" 2>&1 || true)
 if echo "${OUTPUT}" | grep -q "first token from ci-primary"; then
   log "✅ PASS: Primary succeeded, no failover"
 else
@@ -103,7 +114,7 @@ log "Test 2: Primary fails, fallback succeeds"
 curl -sf -X POST "http://127.0.0.1:${PRIMARY_PORT}/__admin/mode" -H "Content-Type: application/json" -d '{"mode":"fail"}' > /dev/null
 log "Set primary to fail mode"
 
-OUTPUT=$(DEBUG=pi-failover timeout 30 pi -p "test failover" 2>&1 || true)
+OUTPUT=$(DEBUG=pi-failover timeout 30 pi --provider ci-primary --model auto -p "test failover" 2>&1 || true)
 if echo "${OUTPUT}" | grep -q "⚠ failover: ci-primary → ci-fallback/auto"; then
   log "✅ PASS: Failover triggered"
 else
@@ -125,7 +136,7 @@ log "Test 3: Both fail -> exhaustion"
 curl -sf -X POST "http://127.0.0.1:${FALLBACK_PORT}/__admin/mode" -H "Content-Type: application/json" -d '{"mode":"fail"}' > /dev/null
 log "Set fallback to fail mode"
 
-OUTPUT=$(DEBUG=pi-failover timeout 30 pi -p "test exhaustion" 2>&1 || true)
+OUTPUT=$(DEBUG=pi-failover timeout 30 pi --provider ci-primary --model auto -p "test exhaustion" 2>&1 || true)
 if echo "${OUTPUT}" | grep -q "all candidates exhausted\|all candidates failed\|exhausted"; then
   log "✅ PASS: Chain exhausted correctly"
 else
@@ -174,7 +185,7 @@ EOF
 # Switch fallback back to success
 curl -sf -X POST "http://127.0.0.1:${FALLBACK_PORT}/__admin/mode" -H "Content-Type: application/json" -d '{"mode":"success"}' > /dev/null
 
-OUTPUT=$(DEBUG=pi-failover timeout 30 pi -p "test timeout" 2>&1 || true)
+OUTPUT=$(DEBUG=pi-failover timeout 30 pi --provider ci-timeout --model auto -p "test timeout" 2>&1 || true)
 if echo "${OUTPUT}" | grep -q "⚠ failover: ci-timeout → ci-fallback/auto"; then
   log "✅ PASS: Timeout triggered failover"
 else
