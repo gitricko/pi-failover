@@ -22,8 +22,6 @@ import type {
 } from "@earendil-works/pi-ai";
 import {
   createAssistantMessageEventStream,
-  isRetryableAssistantError,
-  isContextOverflow,
 } from "@earendil-works/pi-ai";
 import { loadFallbackConfigForProvider, type FallbackConfig } from "./config.js";
 
@@ -186,67 +184,45 @@ export function proxyFirstToken(
  */
 export function shouldFailover(error: Error, fallbackConfig: FallbackConfig): boolean {
   debug("shouldFailover: checking error:", error.name, error.message);
-  
+
   // AbortError from our timeout -> failover
   if (error.name === "AbortError" || error.name === "CancellationError") {
     debug("shouldFailover: AbortError/CancellationError -> true (failover)");
     return true;
   }
 
-  // Network errors (connection failed, DNS, etc.) -> failover
-  if (
-    error.message.includes("fetch failed") ||
-    error.message.includes("ECONNREFUSED") ||
-    error.message.includes("ENOTFOUND") ||
-    error.message.includes("EAI_AGAIN") ||
-    error.message.includes("network") ||
-    error.message.includes("timeout")
-  ) {
-    debug("shouldFailover: network/timeout error -> true (failover)");
+  // Network errors (connection failed, DNS, timeout, reset, etc.) -> failover.
+  // These are exactly the failures a pre-first-token failover extension exists to
+  // catch: a dead/unreachable provider should switch to the next candidate, not be
+  // retried on the same (broken) endpoint by Pi's own retry loop.
+  const msg = error.message.toLowerCase();
+  const NETWORK_SUBSTRINGS = [
+    "fetch failed",
+    "econnrefused",
+    "enotfound",
+    "eai_again",
+    "network",
+    "timeout",
+    "connection error",
+    "connect",
+    "socket",
+    "reset",
+    "und_err",
+    "name resolution",
+  ];
+  if (NETWORK_SUBSTRINGS.some((s) => msg.includes(s))) {
+    debug("shouldFailover: network/connection error -> true (failover)");
     return true;
   }
 
-  // Use Pi's error classification for retryable vs non-retryable
-  // We need to construct a minimal AssistantMessage from the error to check
-  const errorMessage: AssistantMessage = {
-    role: "assistant",
-    content: [],
-    api: "unknown" as Api,
-    provider: "unknown" as any,
-    model: "unknown",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "error",
-    errorMessage: error.message,
-    timestamp: Date.now(),
-  };
-
-  // If it's NOT retryable by Pi's standards, we should failover
-  // If it IS retryable, let Pi handle the retry
-  const retryable = isRetryableAssistantError(errorMessage);
-  debug("shouldFailover: isRetryableAssistantError:", retryable);
-  if (!retryable) {
-    debug("shouldFailover: non-retryable by Pi -> true (failover)");
-    return true;
-  }
-
-  // Context overflow is also non-retryable in the same way
-  const contextOverflow = isContextOverflow(errorMessage);
-  debug("shouldFailover: isContextOverflow:", contextOverflow);
-  if (contextOverflow) {
-    debug("shouldFailover: context overflow -> true (failover)");
-    return true;
-  }
-
-  // Otherwise it's retryable - let Pi handle it
-  debug("shouldFailover: retryable by Pi -> false (no failover)");
-  return false;
+  // Pre-first-token failover contract: if the primary provider failed to produce
+  // ANY token (surfaced as an error event by pi-ai), we try the next candidate.
+  // This includes both non-retryable (400 bad request, auth) and retryable
+  // (rate limit, transient 5xx) errors — the user explicitly configured a fallback
+  // chain to absorb the failure instead of bubbling it up. The only case we let
+  // Pi handle is a successful first token (handled upstream), so here we fail over.
+  debug("shouldFailover: pre-first-token error -> true (failover to next candidate)");
+  return true;
 }
 
 /**

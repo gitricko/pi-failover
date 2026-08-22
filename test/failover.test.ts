@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Model, Context, SimpleStreamOptions, AssistantMessageEventStream, Api, AssistantMessageEvent, AssistantMessage } from "@earendil-works/pi-ai";
-import { createAssistantMessageEventStream, isRetryableAssistantError, isContextOverflow } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { loadFallbackConfigForProvider, parseFallbackConfig, DEFAULT_FALLBACK_CONFIG } from "../src/config.js";
 
 // Import the internal functions for testing
@@ -50,49 +50,29 @@ describe("pi-failover fault-injection matrix (ARCHITECTURE.md §6)", () => {
       expect(shouldFailover(error, DEFAULT_FALLBACK_CONFIG)).toBe(true);
     });
 
-    it("returns true for retryable errors via isRetryableAssistantError (429)", () => {
-      const errorMessage: AssistantMessage = {
-        role: "assistant",
-        content: [],
-        api: "openai" as Api,
-        provider: "openai" as any,
-        model: "gpt-4",
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-        stopReason: "error",
-        errorMessage: "429 Too Many Requests",
-        timestamp: Date.now(),
-      };
-      expect(isRetryableAssistantError(errorMessage)).toBe(true);
+    it("returns true for connection errors (dead provider)", () => {
+      const error = new Error("Connection error.");
+      expect(shouldFailover(error, DEFAULT_FALLBACK_CONFIG)).toBe(true);
     });
 
-    it("returns false for non-retryable errors (4xx client errors) via isRetryableAssistantError", () => {
-      const errorMessage: AssistantMessage = {
-        role: "assistant",
-        content: [],
-        api: "openai" as Api,
-        provider: "openai" as any,
-        model: "gpt-4",
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-        stopReason: "error",
-        errorMessage: "400 Bad Request",
-        timestamp: Date.now(),
-      };
-      expect(isRetryableAssistantError(errorMessage)).toBe(false);
+    it("returns true for ECONNREFUSED", () => {
+      const error = new Error("connect ECONNREFUSED");
+      expect(shouldFailover(error, DEFAULT_FALLBACK_CONFIG)).toBe(true);
     });
 
-    it("returns true for context overflow via isContextOverflow", () => {
-      const errorMessage: AssistantMessage = {
-        role: "assistant",
-        content: [],
-        api: "openai" as Api,
-        provider: "openai" as any,
-        model: "gpt-4",
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-        stopReason: "error",
-        errorMessage: "context length exceeded",
-        timestamp: Date.now(),
-      };
-      expect(isContextOverflow(errorMessage)).toBe(true);
+    it("returns true for retryable errors (429) — pre-first-token failover absorbs them", () => {
+      const error = new Error("429 Too Many Requests");
+      expect(shouldFailover(error, DEFAULT_FALLBACK_CONFIG)).toBe(true);
+    });
+
+    it("returns true for non-retryable client errors (400) — failover still tries next candidate", () => {
+      const error = new Error("400 Bad Request");
+      expect(shouldFailover(error, DEFAULT_FALLBACK_CONFIG)).toBe(true);
+    });
+
+    it("returns true for context overflow (pre-first-token failover)", () => {
+      const error = new Error("context length exceeded");
+      expect(shouldFailover(error, DEFAULT_FALLBACK_CONFIG)).toBe(true);
     });
   });
 
