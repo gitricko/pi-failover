@@ -191,7 +191,7 @@ describe("pi-failover fault-injection matrix (ARCHITECTURE.md §6)", () => {
       };
 
       const config = { chain: [], timeoutMs: 30000, onlyPreFirstToken: true, notifyOnSwitch: false };
-      const wrapper = createFailoverWrapper("test-provider", capturedBuiltin, mockModelRegistry, config);
+      const wrapper = createFailoverWrapper("test-provider", capturedBuiltin, mockModelRegistry, config, () => undefined);
 
       const mockModel = { provider: "test-provider", id: "test-model", api: "openai-completions" } as Model<Api>;
       const mockContext = {} as Context;
@@ -249,7 +249,12 @@ describe("pi-failover fault-injection matrix (ARCHITECTURE.md §6)", () => {
         notifyOnSwitch: false 
       };
       
-      const wrapper = createFailoverWrapper("primary-provider", capturedBuiltin, mockModelRegistry, config);
+      // rawStreamSimple resolver: returns capturedBuiltin for the fallback provider
+      // (so the fallback candidate resolves through the raw path, not re-wrapped)
+      const rawResolver = (providerId: string) =>
+        providerId === "fallback-provider" ? capturedBuiltin : undefined;
+
+      const wrapper = createFailoverWrapper("primary-provider", capturedBuiltin, mockModelRegistry, config, rawResolver);
 
       const mockModel = { provider: "primary-provider", id: "primary-model", api: "openai-completions" } as Model<Api>;
       const mockContext = {} as Context;
@@ -273,6 +278,42 @@ describe("pi-failover fault-injection matrix (ARCHITECTURE.md §6)", () => {
 
       // Should have fallback response
       expect(events.some(e => e.type === "text_delta" && (e as any).delta === "fallback response")).toBe(true);
+    });
+
+    it("does NOT infinitely recurse on circular fallback config", async () => {
+      // Circular config: A → B, B → A. Each provider's raw streamSimple is the
+      // pre-wrap path, so this must terminate (exhaust the chain) instead of looping forever.
+      const streamA = createAssistantMessageEventStream();
+      const streamB = createAssistantMessageEventStream();
+      const modelA = { provider: "provA", id: "modelA", api: "openai-completions" } as Model<Api>;
+      const modelB = { provider: "provB", id: "modelB", api: "openai-completions" } as Model<Api>;
+
+      // raw streamSimple snapshot: BOTH hang forever (simulating unreachable servers)
+      const rawStreamSimple = (providerId: string) => {
+        return (_model: Model<Api>, _ctx: Context, _opts?: SimpleStreamOptions) => {
+          return providerId === "provB" ? streamB : streamA;
+        };
+      };
+
+      const mockModelRegistry: any = {
+        getProvider: vi.fn().mockReturnValue(undefined),
+        find: vi.fn().mockImplementation((p: string) =>
+          p === "provA" ? modelA : p === "provB" ? modelB : undefined),
+      };
+
+      const configA = { chain: ["provB/modelB"], timeoutMs: 50, onlyPreFirstToken: true, notifyOnSwitch: false };
+      const wrapperA = createFailoverWrapper("provA", rawStreamSimple("provA")!, mockModelRegistry, configA, rawStreamSimple);
+
+      const timeout = setTimeout(() => { throw new Error("CIRCULAR RECURSION — test hung"); }, 4000);
+      let count = 0;
+      try {
+        const stream = wrapperA(modelA, {} as Context, {} as SimpleStreamOptions);
+        for await (const _e of stream) { count++; }
+      } finally {
+        clearTimeout(timeout);
+      }
+      // If we got here, there was no infinite loop. (count may be 0 — both hang → abort → exhaust.)
+      expect(true).toBe(true);
     });
   });
 

@@ -256,17 +256,28 @@ export function shouldFailover(error: Error, fallbackConfig: FallbackConfig): bo
  *   would return our wrapper, causing infinite recursion.
  * @param modelRegistry - for resolving fallback chain models
  * @param fallbackConfig - fallback chain configuration
+ * @param rawStreamSimple - resolver returning the PRE-WRAP streamSimple for ANY provider id.
+ *   Fallback candidates are always resolved through this so that a wrapped provider never
+ *   calls another wrapped provider (which would recurse infinitely on circular configs).
  */
 export function createFailoverWrapper(
   primaryProviderId: string,
   builtinStreamSimple: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>,
   modelRegistry: ModelRegistry,
-  fallbackConfig: FallbackConfig
+  fallbackConfig: FallbackConfig,
+  rawStreamSimple: (providerId: string) => ((model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>) | undefined
 ): (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream {
   debug("createFailoverWrapper: creating wrapper for provider:", primaryProviderId, "config:", fallbackConfig);
   
-  // Get the built-in streamSimple for any model — now injected, not looked up by closure.
-  // The injected function is the CAPTURED composed path, so it bypasses our wrapper.
+  // Resolve the raw streamSimple for a given provider id, preferring the
+  // pre-wrap snapshot (rawStreamSimple) so we never re-enter a wrapped provider.
+  const resolveRaw = (providerId: string) => {
+    const r = rawStreamSimple(providerId);
+    if (r) return r;
+    // Fallback to the captured built-in (used for the primary provider itself)
+    if (providerId === primaryProviderId) return builtinStreamSimple;
+    return undefined;
+  };
 
   return function failoverStreamSimple(
     model: Model<Api>,
@@ -275,19 +286,33 @@ export function createFailoverWrapper(
   ): AssistantMessageEventStream {
     debug("failoverStreamSimple: called with model:", model.provider, model.id, "hasOptions:", !!options);
     
-    // Build candidate list: primary + fallback chain
+    // Build candidate list: primary + fallback chain.
+    // Each candidate carries its OWN streamSimple resolver. For the primary we use the
+    // captured composed path; for fallback candidates we resolve through rawStreamSimple
+    // so we never re-enter a wrapped provider (prevents infinite recursion on circular configs).
     const primaryModel = model;
-    const candidates: Array<{ model: Model<Api>; isFallback: boolean; displayName: string }> = [
-      { model: primaryModel, isFallback: false, displayName: primaryProviderId },
+    const candidates: Array<{
+      model: Model<Api>;
+      isFallback: boolean;
+      displayName: string;
+      streamSimple: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>;
+    }> = [
+      { model: primaryModel, isFallback: false, displayName: primaryProviderId, streamSimple: builtinStreamSimple },
       ...fallbackConfig.chain
         .map((modelId) => {
           // Parse "provider/id" format
           const [providerId, ...modelIdParts] = modelId.split("/");
           const fullModelId = modelIdParts.join("/");
           const fallbackModel = modelRegistry.find(providerId, fullModelId);
-          return fallbackModel ? { model: fallbackModel, isFallback: true, displayName: modelId } : null;
+          if (!fallbackModel) return null;
+          const raw = resolveRaw(providerId);
+          if (!raw) {
+            debug("failoverStreamSimple: no raw streamSimple for fallback provider", providerId, "- skipping");
+            return null;
+          }
+          return { model: fallbackModel, isFallback: true, displayName: modelId, streamSimple: raw };
         })
-        .filter((c): c is { model: Model<Api>; isFallback: boolean; displayName: string } => c !== null),
+        .filter((c): c is NonNullable<typeof c> => c !== null),
     ];
 
     debug("failoverStreamSimple: candidates:", candidates.map(c => `${c.displayName} (fallback=${c.isFallback})`));
@@ -370,11 +395,11 @@ export function createFailoverWrapper(
             signal: mergedSignal,
           };
 
-          // Call the CAPTURED built-in streamSimple for this candidate
-          debug("failoverStreamSimple: calling captured builtinStreamSimple for", candidate.displayName);
+          // Call the candidate's OWN streamSimple (raw path — never wrapped) for this attempt
+          debug("failoverStreamSimple: calling candidate streamSimple for", candidate.displayName);
 
           // Try the candidate model
-          const stream = await builtinStreamSimple(candidate.model, context, streamOptions);
+          const stream = await candidate.streamSimple(candidate.model, context, streamOptions);
           debug("failoverStreamSimple: builtinStreamSimple returned stream for", candidate.displayName);
 
           // Wrap stream with first-token detection.
@@ -525,7 +550,8 @@ export default async function (pi: ExtensionAPI) {
   const wrapProviderIfNeeded = async (
     ctx: ExtensionContext,
     providerId: string,
-    allModels: Model<Api>[]
+    allModels: Model<Api>[],
+    rawStreamSimple: (providerId: string) => ((model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>) | undefined
   ) => {
     const modelRegistry = ctx.modelRegistry;
     // Cast to access private runtime.config.getProvider for models.json fallback config
@@ -563,7 +589,7 @@ export default async function (pi: ExtensionAPI) {
     const existingConfig = modelRegistry.getRegisteredProviderConfig(providerId);
 
     // Create the failover wrapper bound to the CAPTURED built-in path
-    const failoverStreamSimple = createFailoverWrapper(providerId, builtinStreamSimple, modelRegistry, fallbackConfig);
+    const failoverStreamSimple = createFailoverWrapper(providerId, builtinStreamSimple, modelRegistry, fallbackConfig, rawStreamSimple);
     debug("wrapProviderIfNeeded: created failover wrapper for", providerId);
 
     // Re-register with explicit api (required by validateExtensionProvider when
@@ -584,7 +610,10 @@ export default async function (pi: ExtensionAPI) {
     }
   };
 
-  // On session start, check all providers for fallback config and wrap them
+  // On session start, check all providers for fallback config and wrap them.
+  // We first capture a RAW snapshot of every provider's streamSimple (pre-wrap),
+  // then re-register each wrapped provider. Fallback candidates resolve through the
+  // raw snapshot, so a wrapped provider never calls another wrapped provider.
   pi.on("session_start", async (event, ctx: ExtensionContext) => {
     debug("session_start event received!");
     const modelRegistry = ctx.modelRegistry;
@@ -605,8 +634,22 @@ export default async function (pi: ExtensionAPI) {
     const providerIds = [...new Set(allModels.map(m => m.provider))];
     debug("session_start: candidate provider IDs:", providerIds);
     
+    // RAW snapshot: capture each provider's composed streamSimple BEFORE any
+    // re-registration. Wrapped providers will resolve their fallback candidates
+    // through this snapshot, breaking recursion (e.g. circular configs).
+    const rawStreamSimpleMap = new Map<string, (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>>();
     for (const providerId of providerIds) {
-      await wrapProviderIfNeeded(ctx, providerId, allModels);
+      const p = modelRegistry.getProvider(providerId);
+      if (p?.streamSimple) {
+        rawStreamSimpleMap.set(providerId, p.streamSimple.bind(p));
+      }
+    }
+    debug("session_start: captured raw streamSimple for", rawStreamSimpleMap.size, "providers");
+
+    const rawStreamSimpleResolver = (providerId: string) => rawStreamSimpleMap.get(providerId);
+
+    for (const providerId of providerIds) {
+      await wrapProviderIfNeeded(ctx, providerId, allModels, rawStreamSimpleResolver);
     }
   });
 
