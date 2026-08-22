@@ -84,12 +84,11 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           echo "Package version: $VERSION"
 
-  # Optional: Integration test with Pi CLI (requires Pi installation)
   integration:
-    name: Integration Test (Optional)
+    name: Integration Test (Pi + Mock OpenAI)
     runs-on: ubuntu-latest
-    if: false  # Set to true when Pi CLI is available in CI
     needs: build
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -102,16 +101,22 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build extension
+        run: npm run build
+
       - name: Install Pi CLI
         run: |
-          # Install Pi CLI - this would need to be adapted based on Pi's installation method
+          # Install Pi CLI from npm
           npm install -g @earendil-works/pi-coding-agent@0.84.2
 
       - name: Install extension locally
         run: |
           pi install . --local --approve
 
-      - name: Verify extension loads
+      - name: Run integration tests
         run: |
-          # This would run a quick Pi session to verify the extension loads
-          echo "Integration test placeholder - requires Pi environment"
+          chmod +x scripts/integration-test.sh
+          ./scripts/integration-test.sh
+        env:
+          # Ensure clean environment
+          HOME: ${{ runner.temp }}
