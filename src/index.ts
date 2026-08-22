@@ -102,7 +102,10 @@ export function proxyFirstToken(
         // (see lazy.js lazyStream catch: pushes error event + end). Detect that
         // BEFORE first token so failover can trigger.
         if (!firstTokenEmitted && event.type === "error") {
-          debug("proxyFirstToken: pre-token error EVENT:", event.error?.errorMessage ?? "unknown");
+          debug("proxyFirstToken: pre-token error EVENT:", JSON.stringify(event.error));
+          // Get the underlying cause for clearer logging
+          const raw = (event.error as any)?.error ?? event.error;
+          debug("proxyFirstToken: error stack:", (raw as Error)?.stack ?? "no stack");
           const err = new Error(event.error?.errorMessage ?? "pre-first-token error event");
           err.name = event.error?.stopReason === "aborted" ? "AbortError" : "ProviderError";
           onErrorBeforeFirstToken(err);
