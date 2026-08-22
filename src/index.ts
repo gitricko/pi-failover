@@ -324,7 +324,8 @@ export function createFailoverWrapper(
         // Track if we've already cleaned up abort listeners
         let abortCleanedUp = false;
         // Pre-first-token error captured from an error EVENT (pi-ai style failure)
-        let preTokenError: Error | null = null;
+        // Use a const reference to avoid TS narrowing issues
+        let preTokenErrorRef: { current: Error | null } = { current: null };
         const cleanupAbortListeners = () => {
           if (abortCleanedUp) return;
           abortCleanedUp = true;
@@ -371,75 +372,29 @@ export function createFailoverWrapper(
               // Error before first token - clear timeout and signal failover decision
               debug("failoverStreamSimple: error before first token from", candidate.displayName, ":", error.name, error.message);
               cleanupAbortListeners();
-              preTokenError = error;
+              preTokenErrorRef.current = error;
             }
           );
 
           // Consume the wrapped stream and push to proxy
-          try {
-            preTokenError = null;
-            debug("failoverStreamSimple: consuming wrapped stream for", candidate.displayName);
-            for await (const event of wrappedStream) {
-              proxy.push(event);
-            }
-            // If we get here, the stream completed successfully
-            debug("failoverStreamSimple: stream completed successfully for", candidate.displayName);
-            proxy.end();
-            return;
-          } catch (streamError) {
-            const err = preTokenError ?? (streamError instanceof Error ? streamError : new Error(String(streamError)));
-            debug("failoverStreamSimple: stream error for", candidate.displayName, ":", err.name, err.message);
-            cleanupAbortListeners();
-            
-            if (i < candidates.length - 1 && shouldFailover(err, fallbackConfig)) {
-              // Notify on switch if configured
-              if (fallbackConfig.notifyOnSwitch) {
-                const fromName = candidates[i].displayName;
-                const toName = candidates[i + 1].displayName;
-                debugWarn("⚠ failover:", fromName, "→", toName, "(", err.name, ":", err.message, ")");
-              }
-              lastError = err;
-              debug("failoverStreamSimple: will try next candidate");
-              continue; // Try next candidate
-            }
-
-            // Don't failover - re-throw via proxy
-            debug("failoverStreamSimple: not failing over, pushing error to proxy");
-            lastError = err;
-            const errorMessage: AssistantMessage = {
-              role: "assistant",
-              content: [],
-              api: "unknown" as Api,
-              provider: "unknown" as any,
-              model: candidate.model.id,
-              usage: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-              stopReason: "error",
-              errorMessage: err.message,
-              timestamp: Date.now(),
-            };
-            proxy.push({
-              type: "error",
-              reason: "error",
-              error: errorMessage,
-            });
-            proxy.end();
-            return;
+          debug("failoverStreamSimple: consuming wrapped stream for", candidate.displayName);
+          for await (const event of wrappedStream) {
+            proxy.push(event);
           }
-        } catch (error) {
+          // If we get here, the stream completed successfully
+          // BUT check if we captured a pre-token error event (pi-ai delivers failures as events)
+          if (preTokenErrorRef.current != null) {
+            debug("failoverStreamSimple: stream ended with pre-token error:", preTokenErrorRef.current.message);
+            throw preTokenErrorRef.current;
+          }
+          debug("failoverStreamSimple: stream completed successfully for", candidate.displayName);
+          proxy.end();
+          return;
+        } catch (streamError) {
+          const err = preTokenErrorRef.current ?? (streamError instanceof Error ? streamError : new Error(String(streamError)));
+          debug("failoverStreamSimple: stream error for", candidate.displayName, ":", err.name, err.message);
           cleanupAbortListeners();
-
-          const err = error instanceof Error ? error : new Error(String(error));
-          debug("failoverStreamSimple: caught error for", candidate.displayName, ":", err.name, err.message);
-          lastError = err;
-
-          // Check if we should failover to next candidate
+          
           if (i < candidates.length - 1 && shouldFailover(err, fallbackConfig)) {
             // Notify on switch if configured
             if (fallbackConfig.notifyOnSwitch) {
@@ -447,12 +402,14 @@ export function createFailoverWrapper(
               const toName = candidates[i + 1].displayName;
               debugWarn("⚠ failover:", fromName, "→", toName, "(", err.name, ":", err.message, ")");
             }
-            debug("failoverStreamSimple: will try next candidate after catch");
+            lastError = err;
+            debug("failoverStreamSimple: will try next candidate");
             continue; // Try next candidate
           }
 
           // Don't failover - re-throw via proxy
-          debug("failoverStreamSimple: not failing over after catch, pushing error to proxy");
+          debug("failoverStreamSimple: not failing over, pushing error to proxy");
+          lastError = err;
           const errorMessage: AssistantMessage = {
             role: "assistant",
             content: [],
