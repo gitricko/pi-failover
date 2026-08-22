@@ -182,16 +182,16 @@ describe("pi-failover fault-injection matrix (ARCHITECTURE.md §6)", () => {
       mockStream.push({ type: "text_delta", text: "test" });
       mockStream.end();
 
+      const capturedBuiltin = vi.fn().mockReturnValue(mockStream);
+
       const mockModelRegistry = {
-        getProvider: vi.fn().mockReturnValue({
-          streamSimple: vi.fn().mockReturnValue(mockStream),
-        }),
+        getProvider: vi.fn().mockReturnValue(undefined),
         find: vi.fn().mockReturnValue(undefined),
         runtime: undefined,
       };
 
       const config = { chain: [], timeoutMs: 30000, onlyPreFirstToken: true, notifyOnSwitch: false };
-      const wrapper = createFailoverWrapper("test-provider", mockModelRegistry, config);
+      const wrapper = createFailoverWrapper("test-provider", capturedBuiltin, mockModelRegistry, config);
 
       const mockModel = { provider: "test-provider", id: "test-model", api: "openai-completions" } as Model<Api>;
       const mockContext = {} as Context;
@@ -206,47 +206,50 @@ describe("pi-failover fault-injection matrix (ARCHITECTURE.md §6)", () => {
       expect(events.length).toBe(1);
       expect(events[0].type).toBe("text_delta");
       expect(events[0].text).toBe("test");
+      expect(capturedBuiltin).toHaveBeenCalledWith(mockModel, mockContext, mockOptions);
     });
 
     it("tries fallback when primary times out (pre-first-token)", async () => {
-      // Primary stream: never emits, just hangs - but we need to mock the abort behavior
-      // The wrapper uses setTimeout to abort, so we need to control time
-      // This is a complex integration test that requires more sophisticated mocking
-      // For now, we verify the wrapper is created correctly
+      // Primary stream: never emits, just hangs
+      const primaryStream = createAssistantMessageEventStream();
+      // Fallback stream: emits lazily (don't pre-end; pi-ai streams replay only while open)
+      const fallbackStream = createAssistantMessageEventStream();
+
+      const fallbackModel = {
+        provider: "fallback-provider",
+        id: "fallback-model",
+        api: "openai-completions",
+      } as Model<Api>;
+
       const mockModelRegistry = {
-        getProvider: vi.fn(),
-        find: vi.fn()
-          .mockReturnValueOnce(undefined)
-          .mockReturnValue({
-            provider: "fallback-provider",
-            id: "fallback-model",
-            api: "openai-completions",
-          } as Model<Api>),
-        runtime: {
-          streamSimple: vi.fn()
-            .mockReturnValueOnce(
-              // Primary: hangs
-              (async function* () {
-                await new Promise(() => {}); // Never resolves
-              })()
-            )
-            .mockReturnValueOnce(
-              // Fallback: succeeds
-              (async function* () {
-                yield { type: "text_delta", text: "fallback response" };
-              })()
-            ),
-        },
+        getProvider: vi.fn().mockReturnValue(undefined),
+        find: vi.fn().mockImplementation((providerId: string) => {
+          if (providerId === "fallback-provider") return fallbackModel;
+          return undefined;
+        }),
       };
+
+      // Captured builtin dispatches by model.provider
+      const capturedBuiltin = vi.fn().mockImplementation((model: Model<Api>) => {
+        if (model.provider === "fallback-provider") {
+          // Emit the fallback token on next tick, then end
+          setTimeout(() => {
+            fallbackStream.push({ type: "text_delta", contentIndex: 0, delta: "fallback response", partial: {} as any });
+            fallbackStream.end();
+          }, 10);
+          return fallbackStream;
+        }
+        return primaryStream;
+      });
 
       const config = { 
         chain: ["fallback-provider/fallback-model"], 
-        timeoutMs: 50, 
+        timeoutMs: 50,
         onlyPreFirstToken: true, 
         notifyOnSwitch: false 
       };
       
-      const wrapper = createFailoverWrapper("primary-provider", mockModelRegistry, config);
+      const wrapper = createFailoverWrapper("primary-provider", capturedBuiltin, mockModelRegistry, config);
 
       const mockModel = { provider: "primary-provider", id: "primary-model", api: "openai-completions" } as Model<Api>;
       const mockContext = {} as Context;
@@ -254,9 +257,22 @@ describe("pi-failover fault-injection matrix (ARCHITECTURE.md §6)", () => {
 
       const stream = wrapper(mockModel, mockContext, mockOptions);
       
-      // Verify the wrapper returns a valid stream (it's a proxy stream)
-      expect(stream).toBeDefined();
-      expect(typeof stream[Symbol.asyncIterator]).toBe("function");
+      // Consume with a timeout so the hung primary triggers our abort → fallback
+      const events: AssistantMessageEvent[] = [];
+      const timeout = setTimeout(() => {
+        throw new Error("Test timed out waiting for fallback");
+      }, 5000);
+      try {
+        for await (const event of stream) {
+          events.push(event);
+          if (events.length >= 2) break; // got the fallback token + end
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+
+      // Should have fallback response
+      expect(events.some(e => e.type === "text_delta" && (e as any).delta === "fallback response")).toBe(true);
     });
   });
 

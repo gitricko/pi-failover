@@ -75,13 +75,23 @@ function makeErrorMessage(api: Api, model: string, message: string): AssistantMe
  * Once a token is emitted, the proxy passes through all events untouched.
  * If an error occurs before first token, the proxy can signal that fallback should be attempted.
  */
+/**
+ * Creates a wrapper around a stream that detects first token emission and
+ * pre-first-token errors. Returns a NEW stream that the caller should consume;
+ * events are forwarded verbatim EXCEPT a pre-token error event (which is
+ * reported via onErrorBeforeFirstToken and NOT forwarded — the caller decides
+ * the next step). On abort, the upstream consumption stops so iteration ends,
+ * but the returned stream itself is left open for the caller to control.
+ */
 export function proxyFirstToken(
   stream: AssistantMessageEventStream,
   onFirstToken: () => void,
-  onErrorBeforeFirstToken: (error: Error) => void
+  onErrorBeforeFirstToken: (error: Error) => void,
+  abortSignal?: AbortSignal,
 ): AssistantMessageEventStream {
   debug("proxyFirstToken: created proxy for stream");
-  const proxy = createAssistantMessageEventStream();
+  // Internal stream that the caller iterates. We push real events here.
+  const inner = createAssistantMessageEventStream();
   let firstTokenEmitted = false;
 
   (async () => {
@@ -96,9 +106,9 @@ export function proxyFirstToken(
           const err = new Error(event.error?.errorMessage ?? "pre-first-token error event");
           err.name = event.error?.stopReason === "aborted" ? "AbortError" : "ProviderError";
           onErrorBeforeFirstToken(err);
-          // Forward the terminal error event so the consumer's for-await completes
-          proxy.push(event);
-          proxy.end();
+          // Do NOT forward the terminal error event — caller decides next step.
+          // End the inner stream so the caller's for-await loop terminates.
+          inner.end();
           return;
         }
         // Check if this event represents first token emission
@@ -116,19 +126,18 @@ export function proxyFirstToken(
             onFirstToken();
           }
         }
-        proxy.push(event);
+        inner.push(event);
       }
       debug("proxyFirstToken: upstream stream ended normally");
-      proxy.end();
+      // Leave inner open; caller's post-loop logic handles success/error.
+      inner.end();
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       debug("proxyFirstToken: upstream error:", err.name, err.message);
       if (!firstTokenEmitted) {
-        debug("proxyFirstToken: error before first token, calling onErrorBeforeFirstToken");
         onErrorBeforeFirstToken(err);
       } else {
-        // If error after first token, push error event to proxy
-        debug("proxyFirstToken: error after first token, pushing error event to proxy");
+        // Error after first token — re-emit as error event on inner
         const errorMessage: AssistantMessage = {
           role: "assistant",
           content: [],
@@ -147,17 +156,25 @@ export function proxyFirstToken(
           errorMessage: err.message,
           timestamp: Date.now(),
         };
-        proxy.push({
-          type: "error",
-          reason: "error",
-          error: errorMessage,
-        });
-        proxy.end();
+        inner.push({ type: "error", reason: "error", error: errorMessage });
       }
+      inner.end();
     }
   })();
 
-  return proxy;
+  // On abort (timeout), stop consuming the upstream so the inner for-await ends.
+  // We do NOT end `inner` here — the caller (failoverStreamSimple) owns the
+  // lifecycle of the outer proxy and will push the fallback stream's events to it.
+  if (abortSignal) {
+    const onAbort = () => {
+      debug("proxyFirstToken: abort received, ending inner stream");
+      try { inner.end(); } catch { /* already ended */ }
+    };
+    if (abortSignal.aborted) onAbort();
+    else abortSignal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  return inner;
 }
 
 /**
@@ -375,7 +392,8 @@ export function createFailoverWrapper(
               debug("failoverStreamSimple: error before first token from", candidate.displayName, ":", error.name, error.message);
               cleanupAbortListeners();
               preTokenErrorRef.current = error;
-            }
+            },
+            mergedSignal
           );
 
           // Consume the wrapped stream and push to proxy
@@ -385,12 +403,23 @@ export function createFailoverWrapper(
             eventCount++;
             proxy.push(event);
           }
-          debug("failoverStreamSimple: for-await loop completed for", candidate.displayName, "events:", eventCount, "preTokenErrorRef:", preTokenErrorRef.current);
+          debug("failoverStreamSimple: for-await loop completed for", candidate.displayName, "events:", eventCount, "preTokenErrorRef:", preTokenErrorRef.current, "aborted:", abortController.signal.aborted);
           // If we get here, the stream completed successfully
           // BUT check if we captured a pre-token error event (pi-ai delivers failures as events)
           if (preTokenErrorRef.current != null) {
             debug("failoverStreamSimple: stream ended with pre-token error:", preTokenErrorRef.current.message);
             throw preTokenErrorRef.current;
+          }
+          // If the candidate was aborted (timeout) without producing a single token,
+          // treat it as a failover trigger — BUT only if there's a next candidate.
+          // Do NOT end the main proxy here; the next candidate will push to it.
+          if (abortController.signal.aborted) {
+            debug("failoverStreamSimple: candidate aborted (timeout) before first token -", i < candidates.length - 1 ? "will fail over" : "no fallback");
+            if (i < candidates.length - 1) {
+              const timeoutErr = new Error(`timeout after ${fallbackConfig.timeoutMs}ms before first token`);
+              timeoutErr.name = "AbortError";
+              throw timeoutErr;
+            }
           }
           debug("failoverStreamSimple: stream completed successfully for", candidate.displayName);
           proxy.end();
@@ -493,26 +522,27 @@ export default async function (pi: ExtensionAPI) {
   
   // Helper to wrap a provider with failover if it has fallback config
   // This runs inside session_start handler where we have access to ExtensionContext
-  const wrapProviderIfNeeded = async (ctx: ExtensionContext, providerId: string) => {
-    debug("wrapProviderIfNeeded: checking provider:", providerId);
+  const wrapProviderIfNeeded = async (
+    ctx: ExtensionContext,
+    providerId: string,
+    allModels: Model<Api>[]
+  ) => {
     const modelRegistry = ctx.modelRegistry;
     // Cast to access private runtime.config.getProvider for models.json fallback config
     const fallbackConfig = loadFallbackConfigForProvider(providerId, modelRegistry as any);
-    debug("wrapProviderIfNeeded: fallback config for", providerId, ":", fallbackConfig);
-    
+
     if (fallbackConfig.chain.length === 0) {
-      debug("wrapProviderIfNeeded: no fallback chain for", providerId, "- skipping");
-      return; // No fallback chain for this provider
+      return; // No fallback chain for this provider — skip silently
     }
 
+    // Only log once we know there's real work to do
+    debug("wrapProviderIfNeeded: provider", providerId, "has fallback chain:", fallbackConfig.chain);
+
     // Check if this provider has any models
-    const allModels = modelRegistry.getAll();
-    debug("wrapProviderIfNeeded: all models in registry:", allModels.length);
     const providerModels = allModels.filter(m => m.provider === providerId);
-    debug("wrapProviderIfNeeded: models for provider", providerId, ":", providerModels.map(m => m.id));
     if (providerModels.length === 0) {
       debug("wrapProviderIfNeeded: no models for provider", providerId, "- skipping");
-      return; // No models to wrap
+      return;
     }
 
     // CRITICAL: capture the composed provider's streamSimple BEFORE we re-register.
@@ -531,7 +561,6 @@ export default async function (pi: ExtensionAPI) {
     // Get the existing registered config (only what extensions previously registered;
     // models.json fields like baseUrl/apiKey are merged by Pi itself)
     const existingConfig = modelRegistry.getRegisteredProviderConfig(providerId);
-    debug("wrapProviderIfNeeded: existing extension config for", providerId, ":", existingConfig ? Object.keys(existingConfig) : "none");
 
     // Create the failover wrapper bound to the CAPTURED built-in path
     const failoverStreamSimple = createFailoverWrapper(providerId, builtinStreamSimple, modelRegistry, fallbackConfig);
@@ -560,27 +589,24 @@ export default async function (pi: ExtensionAPI) {
     debug("session_start event received!");
     const modelRegistry = ctx.modelRegistry;
 
-    // Source 1: extension-registered providers
-    const registeredIds = [...(modelRegistry.getRegisteredProviderIds?.() ?? [])];
-    debug("session_start: extension-registered provider IDs:", registeredIds);
-
-    // Source 2: providers implied by models in the registry (covers models.json providers)
-    let modelProviderIds: string[] = [];
+    // Build the full model list ONCE (not per-provider)
+    let allModels: Model<Api>[] = [];
     try {
-      const allModels = modelRegistry.getAll();
-      debug("session_start: getAll() returned:", allModels.length, "models");
-      modelProviderIds = [...new Set(allModels.map(m => m.provider))];
-      debug("session_start: provider IDs from models:", modelProviderIds);
+      allModels = modelRegistry.getAll() as Model<Api>[];
+      debug("session_start: registry has", allModels.length, "models across",
+            new Set(allModels.map(m => m.provider)).size, "providers");
     } catch (e) {
       debugError("session_start: getAll() threw:", e instanceof Error ? e.message : e);
+      return;
     }
 
-    const providerIds = [...new Set([...registeredIds, ...modelProviderIds])];
-    debug("session_start: all candidate provider IDs:", providerIds);
+    // Source: every provider that has at least one model in the registry
+    // (covers both extension-registered providers AND models.json providers)
+    const providerIds = [...new Set(allModels.map(m => m.provider))];
+    debug("session_start: candidate provider IDs:", providerIds);
     
     for (const providerId of providerIds) {
-      debug("session_start: processing provider:", providerId);
-      await wrapProviderIfNeeded(ctx, providerId);
+      await wrapProviderIfNeeded(ctx, providerId, allModels);
     }
   });
 
