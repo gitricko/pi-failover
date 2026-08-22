@@ -381,6 +381,7 @@ export function createFailoverWrapper(
           for await (const event of wrappedStream) {
             proxy.push(event);
           }
+          debug("failoverStreamSimple: for-await loop completed for", candidate.displayName, "preTokenErrorRef:", preTokenErrorRef.current);
           // If we get here, the stream completed successfully
           // BUT check if we captured a pre-token error event (pi-ai delivers failures as events)
           if (preTokenErrorRef.current != null) {
