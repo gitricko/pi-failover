@@ -131,6 +131,7 @@ function handleAdmin(req, res) {
       const { mode } = JSON.parse(body || '{}');
       if (['success', 'fail', 'hang', 'timeout'].includes(mode)) {
         MODE = mode;
+        console.log(`[mock-openai:event admin_mode] port=${PORT} mode=${MODE}`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, mode: MODE }));
       } else {
@@ -167,6 +168,7 @@ const server = createServer((req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`[mock-openai] Server running at http://${HOST}:${PORT} (mode: ${MODE})`);
+  console.log(`[mock-openai:event server_up] port=${PORT} mode=${MODE}`);
   console.log(`[mock-openai] Admin: POST http://${HOST}:${PORT}/__admin/mode { "mode": "success|fail|hang|timeout" }`);
   console.log(`[mock-openai] Health: GET http://${HOST}:${PORT}/health`);
 });

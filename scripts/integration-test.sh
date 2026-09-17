@@ -101,7 +101,7 @@ EOF
 log "Test 1: Primary succeeds (no failover)"
 cd /tmp
 OUTPUT=$(DEBUG=pi-failover timeout 30 pi --provider ci-primary --model auto -p "test primary success" 2>&1 || true)
-if echo "${OUTPUT}" | grep -q "first token from ci-primary"; then
+if echo "${OUTPUT}" | grep -q "pi-failover:event first_token provider=ci-primary"; then
   log "✅ PASS: Primary succeeded, no failover"
 else
   error "❌ FAIL: Primary should have succeeded"
@@ -115,7 +115,7 @@ curl -sf -X POST "http://127.0.0.1:${PRIMARY_PORT}/__admin/mode" -H "Content-Typ
 log "Set primary to fail mode"
 
 OUTPUT=$(DEBUG=pi-failover timeout 30 pi --provider ci-primary --model auto -p "test failover" 2>&1 || true)
-if echo "${OUTPUT}" | grep -q "⚠ failover: ci-primary → ci-fallback/auto"; then
+if echo "${OUTPUT}" | grep -q "pi-failover:event failover_switch from=ci-primary to=ci-fallback/auto"; then
   log "✅ PASS: Failover triggered"
 else
   error "❌ FAIL: Failover should have triggered"
@@ -123,7 +123,7 @@ else
   exit 1
 fi
 
-if echo "${OUTPUT}" | grep -q "first token from ci-fallback"; then
+if echo "${OUTPUT}" | grep -q "pi-failover:event first_token provider=ci-fallback/auto"; then
   log "✅ PASS: Fallback succeeded"
 else
   error "❌ FAIL: Fallback should have succeeded"
@@ -137,7 +137,7 @@ curl -sf -X POST "http://127.0.0.1:${FALLBACK_PORT}/__admin/mode" -H "Content-Ty
 log "Set fallback to fail mode"
 
 OUTPUT=$(DEBUG=pi-failover timeout 30 pi --provider ci-primary --model auto -p "test exhaustion" 2>&1 || true)
-if echo "${OUTPUT}" | grep -q "all candidates exhausted\|all candidates failed\|exhausted"; then
+if echo "${OUTPUT}" | grep -q "pi-failover:event exhausted"; then
   log "✅ PASS: Chain exhausted correctly"
 else
   # Check for error message indicating all failed
