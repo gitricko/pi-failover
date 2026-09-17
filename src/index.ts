@@ -424,12 +424,16 @@ export function createFailoverWrapper(
             if (i < candidates.length - 1) {
               const timeoutErr = new Error(`timeout after ${fallbackConfig.timeoutMs}ms before first token`);
               timeoutErr.name = "AbortError";
+              // Stable debug marker for CI/integration tests.
+              debug(`pi-failover:event pretoken_timeout provider=${candidate.displayName}`);
               throw timeoutErr;
             }
           }
           debug("failoverStreamSimple: stream completed successfully for", candidate.displayName);
           // Successfully committed to a candidate — clear any failover status.
           if (ui) ui.setStatus("failover", undefined);
+          // Stable debug marker for CI/integration tests: first token observed.
+          debug(`pi-failover:event first_token provider=${candidate.displayName} model=${candidate.model.id}`);
           proxy.end();
           return;
         } catch (streamError) {
@@ -443,6 +447,8 @@ export function createFailoverWrapper(
               const fromName = candidates[i].displayName;
               const toName = candidates[i + 1].displayName;
               debugWarn("⚠ failover:", fromName, "→", toName, "(", err.name, ":", err.message, ")");
+              // Stable debug marker for CI/integration tests.
+              debug(`pi-failover:event failover_switch from=${fromName} to=${toName}`);
               // Surface the switch in the Pi UI status bar / footer.
               // Key "failover" is cleared on session_shutdown (and below on success).
               if (ui) {
@@ -488,6 +494,8 @@ export function createFailoverWrapper(
       // All candidates exhausted - push final error
       debugError("failoverStreamSimple: ALL candidates exhausted");
       const finalError = lastError || new Error("All fallback candidates exhausted");
+      // Stable debug marker for CI/integration tests.
+      debug(`pi-failover:event exhausted error=${finalError.message}`);
       const errorMessage: AssistantMessage = {
         role: "assistant",
         content: [],

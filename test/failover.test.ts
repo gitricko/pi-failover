@@ -90,6 +90,7 @@ describe("pi-failover fault-injection matrix (ARCHITECTURE.md §6)", () => {
       source.push({ type: "text_delta", text: "Hello" });
       source.end();
 
+      // Consume until stream terminates to assert proxy lifecycle.
       for await (const _ of proxy) {}
 
       expect(firstTokenCalled).toBe(true);
@@ -248,16 +249,20 @@ describe("pi-failover fault-injection matrix (ARCHITECTURE.md §6)", () => {
         throw new Error("Test timed out waiting for fallback");
       }, 5000);
       try {
+        // Don't stop after N events; consume until the stream terminates
+        // (or until the fallback marker is seen and we can observe completion via loop exit).
         for await (const event of stream) {
           events.push(event);
-          if (events.length >= 2) break; // got the fallback token + end
         }
       } finally {
         clearTimeout(timeout);
       }
 
-      // Should have fallback response
-      expect(events.some(e => e.type === "text_delta" && (e as any).delta === "fallback response")).toBe(true);
+      // Assert the observable contract: fallback produced its first token.
+      const hasFallback = events.some(
+        (e) => e.type === "text_delta" && (e as any).delta === "fallback response"
+      );
+      expect(hasFallback).toBe(true);
     });
 
     it("does NOT infinitely recurse on circular fallback config", async () => {
@@ -292,7 +297,10 @@ describe("pi-failover fault-injection matrix (ARCHITECTURE.md §6)", () => {
       } finally {
         clearTimeout(timeout);
       }
-      // If we got here, there was no infinite loop. (count may be 0 — both hang → abort → exhaust.)
+      // If we got here, there was no infinite loop.
+      // We intentionally avoid asserting on event count here because a hung provider
+      // may result in an exhaustion path that terminates without emitting any events.
+      // The timeout above is the real non-recursion guarantee.
       expect(true).toBe(true);
     });
   });
