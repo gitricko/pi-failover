@@ -114,6 +114,11 @@ log "Test 2: Primary fails, fallback succeeds"
 curl -sf -X POST "http://127.0.0.1:${PRIMARY_PORT}/__admin/mode" -H "Content-Type: application/json" -d '{"mode":"fail"}' > /dev/null
 log "Set primary to fail mode"
 
+# Ensure fallback is healthy for Test 2
+curl -sf -X POST "http://127.0.0.1:${FALLBACK_PORT}/__admin/mode" \
+  -H "Content-Type: application/json" \
+  -d '{"mode":"success"}' > /dev/null
+
 OUTPUT=$(DEBUG=pi-failover timeout 30 pi --provider ci-primary --model auto -p "test failover" 2>&1 || true)
 if echo "${OUTPUT}" | grep -q "pi-failover:event failover_switch from=ci-primary to=ci-fallback/auto"; then
   log "✅ PASS: Failover triggered"
