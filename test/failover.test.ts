@@ -90,6 +90,7 @@ describe("pi-failover fault-injection matrix (ARCHITECTURE.md §6)", () => {
       source.push({ type: "text_delta", text: "Hello" });
       source.end();
 
+      // Consume until stream terminates to assert proxy lifecycle.
       for await (const _ of proxy) {}
 
       expect(firstTokenCalled).toBe(true);
