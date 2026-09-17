@@ -292,8 +292,12 @@ describe("pi-failover fault-injection matrix (ARCHITECTURE.md §6)", () => {
       } finally {
         clearTimeout(timeout);
       }
-      // If we got here, there was no infinite loop. (count may be 0 — both hang → abort → exhaust.)
-      expect(true).toBe(true);
+      // If we got here, there was no infinite loop.
+      // Strengthen the assertion: the wrapper should terminate with a terminal error/event.
+      // We don't assert the exact message (implementation detail), only that we surfaced an error.
+      expect(count).toBeGreaterThanOrEqual(0);
+      // IMPORTANT: at least one event should have been emitted (usually an error/exhaustion event)
+      expect(count).toBeGreaterThan(0);
     });
   });
 
