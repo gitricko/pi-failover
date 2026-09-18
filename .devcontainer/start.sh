@@ -103,3 +103,5 @@ if [ -d "$PI_CONF_TRACKED" ]; then
     fi
   done
 fi
+
+pi install ./ --approve
