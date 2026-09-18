@@ -72,7 +72,7 @@ fi
 # Wait for 9router to be ready, then run its config script
 if command -v 9router &>/dev/null; then
   echo "[$SCRIPT_NAME] Waiting for 9router to be ready..."
-  MAX_ATTEMPTS=60
+  MAX_ATTEMPTS=300
   for ((attempt=1; attempt<=MAX_ATTEMPTS; attempt++)); do
     if curl -s --max-time 3 -o /dev/null http://localhost:7352/api/health; then
       break
@@ -121,7 +121,7 @@ fi
 
 # Preconfigure Omniroute
 #   Wait for OmniRoute to be ready
-MAX_ATTEMPTS=120
+MAX_ATTEMPTS=300
 for ((attempt=1; attempt<=MAX_ATTEMPTS; attempt++)); do
     echo "[$SCRIPT_NAME] Waiting for OmniRoute to be ready (attempt $attempt/$MAX_ATTEMPTS)..."
     
