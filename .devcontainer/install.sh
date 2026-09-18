@@ -2,7 +2,8 @@
 
 PI_AGENT_VERSION=0.85.1
 OMNIROUTE_VERSION=3.8.50
-MODELRELAY_VERSION=1.22.2
+# MODELRELAY_VERSION=1.22.2
+9ROUTER_VERSION=0.5.81
 OLLAMA_VERSION=0.32.9
 MNEMON_VERSION=0.2.4
 
@@ -51,23 +52,22 @@ else
   echo "[$SCRIPT_NAME] ollama not found, skipping start"
 fi
 
-# Install modelrelay globally
-# sudo npm install -g modelrelay@${MODELRELAY_VERSION} && \
-sudo npm install github:gitricko/modelrelay -g --prefix /usr/local/lib/modelrelay
-sudo ln -sf /usr/local/lib/modelrelay/bin/modelrelay /usr/local/bin/modelrelay
+# Install 9router globally
+# sudo npm install -g modelrelay@v${9ROUTER_VERSION} && \
+sudo npm install 9router -g --prefix /usr/local/lib/9router
+sudo ln -sf /usr/local/lib/9router/bin/9router /usr/local/bin/9router
 sudo npm cache clean --force
 
-echo "[$SCRIPT_NAME] Checking modelrelay..."
-if command -v modelrelay &>/dev/null; then
-  if pgrep -f modelrelay > /dev/null; then
-    echo "[$SCRIPT_NAME] modelrelay is already running, skipping"
+echo "[$SCRIPT_NAME] Checking 9router..."
+if command -v 9router &>/dev/null; then
+  if pgrep -f 9router > /dev/null; then
+    echo "[$SCRIPT_NAME] 9router is already running, skipping"
   else
-    echo "[$SCRIPT_NAME] Starting modelrelay in the background..."
-    modelrelay --disable
-    setsid /usr/local/bin/modelrelay >> /tmp/modelrelay.log 2>&1 &
+    echo "[$SCRIPT_NAME] Starting 9router in the background..."
+    setsid /usr/local/bin/9router -p 7352 >> /tmp/9router.log 2>&1 &
   fi
 else
-  echo "[$SCRIPT_NAME] modelrelay not found, skipping start"
+  echo "[$SCRIPT_NAME] 9router not found, skipping start"
 fi
 
 # Install TailScale
