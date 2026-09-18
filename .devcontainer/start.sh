@@ -85,10 +85,10 @@ fi
 # 5.6. Pi-agent LM config persistence — REPAIR GUARD ONLY.
 # The pi crewmate (firstmate-bridge skill) needs ~/.pi/agent/{models,settings}.json
 # pointed at the local OmniRoute relay. Those files are tracked under
-# .devcontainer/pi-config/ so they survive rebuilds; this guard (re)links them.
+# .pi-config/ in the workspace root so they survive rebuilds; this guard (re)links them.
 # pi writes its own stub on first launch, so we replace a plain file but never
 # clobber an existing symlink that already resolves to the tracked target.
-PI_CONF_TRACKED="$CODESPACE_VSCODE_FOLDER/pi-config"
+PI_CONF_TRACKED="$CODESPACE_VSCODE_FOLDER/.pi-config"
 PI_AGENT_DIR="$HOME/.pi/agent"
 if [ -d "$PI_CONF_TRACKED" ]; then
   mkdir -p "$PI_AGENT_DIR"
