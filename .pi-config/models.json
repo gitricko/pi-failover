@@ -16,13 +16,13 @@
         }
       ],
       "fallback": {
-        "chain": ["modelrelay/auto-fastest"],
+        "chain": ["9router/auto-fastest"],
         "timeoutMs": 30000,
         "onlyPreFirstToken": true,
         "notifyOnSwitch": true
       }
     },
-    "modelrelay": {
+    "9router": {
       "baseUrl": "http://localhost:7352/v1",
       "api": "openai-completions",
       "apiKey": "no-key-needed",
