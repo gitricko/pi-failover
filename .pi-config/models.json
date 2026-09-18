@@ -5,7 +5,15 @@
       "api": "openai-completions",
       "apiKey": "no-key-needed",
       "models": [
-        { "id": "auto-fastest" }
+        {
+          "id": "auto-fastest",
+          "name": "auto-fastest",
+          "reasoning": false,
+          "input": ["text"],
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+          "contextWindow": 256000,
+          "maxTokens": 8192
+        }
       ],
       "fallback": {
         "chain": ["modelrelay/auto-fastest"],
@@ -19,7 +27,15 @@
       "api": "openai-completions",
       "apiKey": "no-key-needed",
       "models": [
-        { "id": "auto-fastest" }
+        {
+          "id": "auto-fastest",
+          "name": "auto-fastest",
+          "reasoning": false,
+          "input": ["text"],
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+          "contextWindow": 256000,
+          "maxTokens": 8192
+        }
       ],
       "fallback": {
         "chain": ["omniroute/auto-fastest"],
