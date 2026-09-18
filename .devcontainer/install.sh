@@ -69,6 +69,25 @@ else
   echo "[$SCRIPT_NAME] 9router not found, skipping start"
 fi
 
+# Wait for 9router to be ready, then run its config script
+if command -v 9router &>/dev/null; then
+  echo "[$SCRIPT_NAME] Waiting for 9router to be ready..."
+  MAX_ATTEMPTS=60
+  for ((attempt=1; attempt<=MAX_ATTEMPTS; attempt++)); do
+    if curl -s --max-time 3 -o /dev/null http://localhost:7352/api/health; then
+      break
+    fi
+    if [ "$attempt" -eq "$MAX_ATTEMPTS" ]; then
+      echo "[$SCRIPT_NAME] Error: 9router failed to start after $MAX_ATTEMPTS attempts."
+      exit 1
+    fi
+    sleep 1
+  done
+  echo "[$SCRIPT_NAME] Configuring 9router..."
+  bash "$SCRIPT_DIR/9router-config.sh"
+  echo "[$SCRIPT_NAME] 9router configuration complete!"
+fi
+
 # Install TailScale
 # sudo mkdir -p /var/run/tailscale /var/lib/tailscale && sudo curl -fsSL https://tailscale.com/install.sh | sh && sudo rm -rf /var/lib/apt/lists/*
 
