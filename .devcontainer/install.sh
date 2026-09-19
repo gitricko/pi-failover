@@ -2,7 +2,7 @@
 
 PI_AGENT_VERSION=0.85.1
 OMNIROUTE_VERSION=3.8.50
-9ROUTER_VERSION=0.5.81
+NINE_ROUTER_VERSION=0.5.81
 OLLAMA_VERSION=0.32.9
 MNEMON_VERSION=0.2.4
 
@@ -53,7 +53,7 @@ fi
 
 # Install 9router globally
 # sudo npm install -g modelrelay@v${9ROUTER_VERSION} && \
-sudo npm install 9router -g --prefix /usr/local/lib/9router
+sudo npm install 9router@v${NINE_ROUTER_VERSION} -g --prefix /usr/local/lib/9router
 sudo ln -sf /usr/local/lib/9router/bin/9router /usr/local/bin/9router
 sudo npm cache clean --force
 
