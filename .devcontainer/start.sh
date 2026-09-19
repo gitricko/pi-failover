@@ -15,7 +15,7 @@ WORKSPACE_ROOT="${WORKSPACE:-$(dirname "$SCRIPT_DIR")}"
 MISSING=()
 
 # Check service binaries
-for bin in modelrelay omniroute ollama pi mnemon; do
+for bin in 9router omniroute ollama pi mnemon; do
   if ! command -v "$bin" &>/dev/null; then
     MISSING+=("binary: $bin")
   fi
@@ -36,12 +36,12 @@ echo "*****   Starting Agent Services ....    *****"
 echo
 echo "    $(date)"
 
-# 1. Starting modelrelay...
-if pgrep -f modelrelay > /dev/null; then
-  echo "[$SCRIPT_NAME] modelrelay is already running, skipping"
+# 1. Starting 9router...
+if pgrep -f 9router > /dev/null; then
+  echo "[$SCRIPT_NAME] 9router is already running, skipping"
 else
-  echo "[$SCRIPT_NAME] Starting modelrelay in the background..."
-  setsid /usr/local/bin/modelrelay >> /tmp/modelrelay.log 2>&1 &
+  echo "[$SCRIPT_NAME] Starting 9router in the background..."
+  nohup /usr/local/bin/9router --host 0.0.0.0 --host 127.0.0.1 --port 7352 --no-browser --skip-update >> /tmp/9router.log 2>&1 &
 fi
 
 # 2. Starting omniroute...
@@ -85,10 +85,10 @@ fi
 # 5.6. Pi-agent LM config persistence — REPAIR GUARD ONLY.
 # The pi crewmate (firstmate-bridge skill) needs ~/.pi/agent/{models,settings}.json
 # pointed at the local OmniRoute relay. Those files are tracked under
-# .devcontainer/pi-config/ so they survive rebuilds; this guard (re)links them.
+# .pi-config/ in the workspace root so they survive rebuilds; this guard (re)links them.
 # pi writes its own stub on first launch, so we replace a plain file but never
 # clobber an existing symlink that already resolves to the tracked target.
-PI_CONF_TRACKED="$WORKSPACE_ROOT/.devcontainer/pi-config"
+PI_CONF_TRACKED="$CODESPACE_VSCODE_FOLDER/.pi-config"
 PI_AGENT_DIR="$HOME/.pi/agent"
 if [ -d "$PI_CONF_TRACKED" ]; then
   mkdir -p "$PI_AGENT_DIR"
@@ -103,3 +103,5 @@ if [ -d "$PI_CONF_TRACKED" ]; then
     fi
   done
 fi
+
+pi install ./ --approve
