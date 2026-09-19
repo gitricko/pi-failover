@@ -82,13 +82,19 @@ else
   echo "[$SCRIPT_NAME] WARNING: Failed to clone gitricko/hermes-plugin-mnemon repository."
 fi
 
+# 6. Install local project as a pi package, project-locally.
+# -l writes the registration to ./.pi/settings.json (git-ignored) instead of
+# the global ~/.pi/agent/settings.json, so the tracked .pi-config/ copy is
+# never polluted with machine-specific "packages" paths or trust flags.
+# Run from the workspace root so "./" resolves to this project.
+(cd "$WORKSPACE_ROOT" && pi install ./ -l --approve)
+
 # 5.6. Pi-agent LM config persistence — REPAIR GUARD ONLY.
 # The pi crewmate (firstmate-bridge skill) needs ~/.pi/agent/{models,settings}.json
 # pointed at the local OmniRoute relay. Those files are tracked under
 # .pi-config/ in the workspace root so they survive rebuilds; this guard (re)links them.
-# pi writes its own stub on first launch, so we replace a plain file but never
-# clobber an existing symlink that already resolves to the tracked target.
-PI_CONF_TRACKED="$CODESPACE_VSCODE_FOLDER/.pi-config"
+# By running AFTER "pi install" we guarantee the final runtime state is symlinked.
+PI_CONF_TRACKED="$WORKSPACE_ROOT/.pi-config"
 PI_AGENT_DIR="$HOME/.pi/agent"
 if [ -d "$PI_CONF_TRACKED" ]; then
   mkdir -p "$PI_AGENT_DIR"
@@ -103,5 +109,3 @@ if [ -d "$PI_CONF_TRACKED" ]; then
     fi
   done
 fi
-
-pi install ./ --approve
