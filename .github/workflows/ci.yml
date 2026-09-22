@@ -107,7 +107,7 @@ jobs:
       - name: Install Pi CLI
         run: |
           # Install Pi CLI from npm
-          npm install -g @earendil-works/pi-coding-agent@0.84.2
+          npm install -g @earendil-works/pi-coding-agent@0.87.1
 
       - name: Run integration tests
         run: |

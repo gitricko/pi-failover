@@ -1,4 +1,9 @@
 {
   "defaultProvider": "omniroute",
-  "defaultModel": "auto-fastest"
+  "defaultModel": "auto-fastest",
+  "defaultProjectTrust": "always",
+  "packages": [
+    "../../../../workspaces/pi-failover"
+  ],
+  "lastChangelogVersion": "0.85.1"
 }
