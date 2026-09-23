@@ -7,5 +7,5 @@
     }
   },
   "postCreateCommand": "( curl -fsSL https://github.com/gitricko/.minions/raw/refs/heads/main/install.sh | bash ) >> /tmp/pi-install.log 2>&1",
-  "postStartCommand":  "bash ./.devcontainer/start.sh >> /tmp/pi-start.log 2>&1"
+  "postStartCommand":  "( $HOME/.minions/boot.sh ) >> /tmp/pi-start.log 2>&1"
 }
