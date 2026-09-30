@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # Keep devDependencies tracking the latest published pi host. This is what
+  # surfaces host API drift (e.g. Context -> TranscriptContext) as a reviewable
+  # PR instead of a surprise. peerDependencies stay "*" — Pi supplies those at
+  # runtime, and "*" has nothing for dependabot to bump.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
