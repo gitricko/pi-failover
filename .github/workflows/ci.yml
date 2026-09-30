@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    # Nightly signal: typecheck + integration against the latest published
+    # pi host. Only the nightly-latest job runs on this trigger.
+    - cron: "0 3 * * *"
 
 jobs:
   lint:
@@ -24,6 +28,11 @@ jobs:
 
       - name: Type check
         run: npx tsc -p tsconfig.json --noEmit
+
+      - name: Host package check (manifest)
+        # Blocks regressions of issue #7: host-provided packages must stay in
+        # peerDependencies "*" and must not be installed locally.
+        run: ./scripts/check-pi-version.sh
 
       - name: Lint (if configured)
         run: |
@@ -106,8 +115,55 @@ jobs:
 
       - name: Install Pi CLI
         run: |
-          # Install Pi CLI from npm
-          npm install -g @earendil-works/pi-coding-agent@0.87.1
+          # Read the tested host version from devDependencies (single source of
+          # truth) rather than hardcoding it — a second hardcoded pin is what let
+          # CI stay green on an old host version (issue #7).
+          PI_VERSION=$(node -p "require('./package.json').devDependencies['@earendil-works/pi-coding-agent'].replace(/^[^\d]*/, '')")
+          echo "Installing pi-coding-agent@${PI_VERSION} (from devDependencies)"
+          npm install -g "@earendil-works/pi-coding-agent@${PI_VERSION}"
+
+      - name: Run integration tests
+        run: |
+          chmod +x scripts/integration-test.sh
+          ./scripts/integration-test.sh
+
+  drift:
+    name: Host version drift (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Report pi version drift
+        # Advisory only: reports how far devDependencies is behind the latest
+        # published host version. Never blocks a PR.
+        run: ./scripts/check-pi-version.sh
+
+  nightly-latest:
+    name: Nightly Check Against Latest pi
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Setup Node
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build extension
+        run: npm run build
+
+      - name: Install latest pi-coding-agent
+        # dist-tags.latest excludes rc/beta/next prereleases.
+        run: |
+          LATEST=$(npm view @earendil-works/pi-coding-agent version)
+          echo "Latest published pi-coding-agent: ${LATEST}"
+          npm install -g "@earendil-works/pi-coding-agent@${LATEST}"
 
       - name: Run integration tests
         run: |

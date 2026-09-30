@@ -4,8 +4,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { Model, Context, SimpleStreamOptions, AssistantMessageEventStream, Api, AssistantMessageEvent, AssistantMessage } from "@earendil-works/pi-ai";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import type { Model, TranscriptContext, SimpleStreamOptions, AssistantMessageEventStream, Api, AssistantMessageEvent, AssistantMessage } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/compat";
 import { loadFallbackConfigForProvider, parseFallbackConfig, DEFAULT_FALLBACK_CONFIG } from "../src/config.js";
 
 // Import the internal functions for testing
@@ -175,7 +175,7 @@ describe("pi-failover fault-injection matrix (ARCHITECTURE.md §6)", () => {
       const wrapper = createFailoverWrapper("test-provider", capturedBuiltin, mockModelRegistry, config, () => undefined);
 
       const mockModel = { provider: "test-provider", id: "test-model", api: "openai-completions" } as Model<Api>;
-      const mockContext = {} as Context;
+      const mockContext = {} as TranscriptContext;
       const mockOptions = {} as SimpleStreamOptions;
 
       const stream = wrapper(mockModel, mockContext, mockOptions);
@@ -238,7 +238,7 @@ describe("pi-failover fault-injection matrix (ARCHITECTURE.md §6)", () => {
       const wrapper = createFailoverWrapper("primary-provider", capturedBuiltin, mockModelRegistry, config, rawResolver);
 
       const mockModel = { provider: "primary-provider", id: "primary-model", api: "openai-completions" } as Model<Api>;
-      const mockContext = {} as Context;
+      const mockContext = {} as TranscriptContext;
       const mockOptions = {} as SimpleStreamOptions;
 
       const stream = wrapper(mockModel, mockContext, mockOptions);
@@ -275,7 +275,7 @@ describe("pi-failover fault-injection matrix (ARCHITECTURE.md §6)", () => {
 
       // raw streamSimple snapshot: BOTH hang forever (simulating unreachable servers)
       const rawStreamSimple = (providerId: string) => {
-        return (_model: Model<Api>, _ctx: Context, _opts?: SimpleStreamOptions) => {
+        return (_model: Model<Api>, _ctx: TranscriptContext, _opts?: SimpleStreamOptions) => {
           return providerId === "provB" ? streamB : streamA;
         };
       };
@@ -292,7 +292,7 @@ describe("pi-failover fault-injection matrix (ARCHITECTURE.md §6)", () => {
       const timeout = setTimeout(() => { throw new Error("CIRCULAR RECURSION — test hung"); }, 4000);
       let count = 0;
       try {
-        const stream = wrapperA(modelA, {} as Context, {} as SimpleStreamOptions);
+        const stream = wrapperA(modelA, {} as TranscriptContext, {} as SimpleStreamOptions);
         for await (const _e of stream) { count++; }
       } finally {
         clearTimeout(timeout);

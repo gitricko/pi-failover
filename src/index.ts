@@ -14,17 +14,48 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type {
   Model,
-  Context,
+  TranscriptContext,
   SimpleStreamOptions,
   AssistantMessageEventStream,
   Api,
   AssistantMessageEvent,
   AssistantMessage,
 } from "@earendil-works/pi-ai";
+// Value import: pi-ai's root entrypoint does not export the stream factory in
+// Pi >= 0.9x; it lives on the /compat entrypoint, which the Pi extension loader
+// aliases the pi-ai root to at runtime.
 import {
   createAssistantMessageEventStream,
-} from "@earendil-works/pi-ai";
+} from "@earendil-works/pi-ai/compat";
 import { loadFallbackConfigForProvider, type FallbackConfig } from "./config.js";
+
+/**
+ * The extension-facing provider `streamSimple` contract (Pi's
+ * `ProviderConfigInput.streamSimple`). Note this is `TranscriptContext`, NOT the
+ * internal `Context` that `ModelRegistry.streamSimple` / `ModelRuntime.streamSimple`
+ * take: in Pi >= 0.9x the context handed to provider implementations is a normalized
+ * transcript that only `normalizeContext()` can produce.
+ */
+type ProviderStreamSimple = (
+  model: Model<Api>,
+  context: TranscriptContext,
+  options?: SimpleStreamOptions
+) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>;
+
+/** Resolver for the pre-wrap (raw) provider stream, keyed by provider id. */
+type RawStreamSimpleResolver = (providerId: string) => ProviderStreamSimple | undefined;
+
+/**
+ * What the failover wrapper actually returns. It is structurally assignable to
+ * `ProviderConfigInput.streamSimple` but narrower: it always hands back a stream
+ * synchronously (the fallback pump runs inside that stream), so callers can
+ * iterate it without awaiting.
+ */
+type FailoverStreamSimple = (
+  model: Model<Api>,
+  context: TranscriptContext,
+  options?: SimpleStreamOptions
+) => AssistantMessageEventStream;
 
 // Debug flag - enable via DEBUG=pi-failover or DEBUG=* environment variable
 const DEBUG = process.env.DEBUG === "*" || (process.env.DEBUG?.includes("pi-failover") ?? false);
@@ -242,12 +273,12 @@ export function shouldFailover(error: Error, fallbackConfig: FallbackConfig): bo
  */
 export function createFailoverWrapper(
   primaryProviderId: string,
-  builtinStreamSimple: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>,
+  builtinStreamSimple: ProviderStreamSimple,
   modelRegistry: ModelRegistry,
   fallbackConfig: FallbackConfig,
-  rawStreamSimple: (providerId: string) => ((model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>) | undefined,
+  rawStreamSimple: RawStreamSimpleResolver,
   ui?: ExtensionUIContext
-): (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream {
+): FailoverStreamSimple {
   debug("createFailoverWrapper: creating wrapper for provider:", primaryProviderId, "config:", fallbackConfig);
   
   // Resolve the raw streamSimple for a given provider id, preferring the
@@ -262,7 +293,7 @@ export function createFailoverWrapper(
 
   return function failoverStreamSimple(
     model: Model<Api>,
-    context: Context,
+    context: TranscriptContext,
     options?: SimpleStreamOptions
   ): AssistantMessageEventStream {
     debug("failoverStreamSimple: called with model:", model.provider, model.id, "hasOptions:", !!options);
@@ -276,7 +307,7 @@ export function createFailoverWrapper(
       model: Model<Api>;
       isFallback: boolean;
       displayName: string;
-      streamSimple: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>;
+      streamSimple: ProviderStreamSimple;
     }> = [
       { model: primaryModel, isFallback: false, displayName: primaryProviderId, streamSimple: builtinStreamSimple },
       ...fallbackConfig.chain
@@ -547,7 +578,7 @@ export default async function (pi: ExtensionAPI) {
     ctx: ExtensionContext,
     providerId: string,
     allModels: Model<Api>[],
-    rawStreamSimple: (providerId: string) => ((model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>) | undefined
+    rawStreamSimple: (providerId: string) => ProviderStreamSimple | undefined
   ) => {
     const modelRegistry = ctx.modelRegistry;
     // Cast to access private runtime.config.getProvider for models.json fallback config
@@ -633,7 +664,7 @@ export default async function (pi: ExtensionAPI) {
     // RAW snapshot: capture each provider's composed streamSimple BEFORE any
     // re-registration. Wrapped providers will resolve their fallback candidates
     // through this snapshot, breaking recursion (e.g. circular configs).
-    const rawStreamSimpleMap = new Map<string, (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>>();
+    const rawStreamSimpleMap = new Map<string, ProviderStreamSimple>();
     for (const providerId of providerIds) {
       const p = modelRegistry.getProvider(providerId);
       if (p?.streamSimple) {
