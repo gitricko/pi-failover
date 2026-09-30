@@ -6,6 +6,15 @@
 
 This is **not** a post-run recovery tool. It is a transport-level, request-time failover — the same behavior Hermes provides — implemented entirely client-side, with no external gateway required.
 
+<p align="center">
+
+[![PI Agent](https://img.shields.io/badge/PI%20Agent-v0.99.1-yellow?logo=github)](https://pi.dev)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+<a href="https://github.com/gitricko/.minions/actions/workflows/ci.yml">
+    <img src="https://github.com/gitricko/.minions/actions/workflows/ci.yml/badge.svg" alt="Latest CI Status">
+</a>
+
+</p>
 ---
 
 ## The problem
@@ -95,7 +104,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the complete algorithm, t
 ### Prerequisites
 
 - Node.js ≥ 22.19.0
-- Pi CLI (`@earendil-works/pi-coding-agent`) 0.84.2+
+- Pi CLI (`@earendil-works/pi-coding-agent`) 0.99.1+
 
 ### Install dependencies
 

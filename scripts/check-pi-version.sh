@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # pi-failover host-package and version checker.
 #
-# Two independent checks:
+# Three checks:
 #
 #   1. Manifest hygiene (offline, deterministic). Host-provided packages must be
 #      declared in peerDependencies with a "*" range and must NOT appear in
@@ -9,7 +9,11 @@
 #      pi-coding-agent/dist/core/resource-loader.js and guards against the bug in
 #      issue #7 (npm installed a second copy of the host's packages).
 #
-#   2. Host version drift (network, advisory). Reports the pi version running in
+#   2. Docs consistency (offline). The README "PI Agent vX" badge and the
+#      Prerequisites "Pi CLI ... X+" line must match the devDependencies pin —
+#      the version CI actually tests against. A mismatch is a repo bug.
+#
+#   3. Host version drift (network, advisory). Reports the pi version running in
 #      this container, the version pinned in devDependencies, and the latest
 #      published version. Never fails unless --strict is passed.
 #
@@ -174,6 +178,47 @@ PY
   return 1
 }
 
+check_docs() {
+  local readme="${PROJECT_ROOT}/README.md"
+  local violations=0
+
+  if [ ! -f "${readme}" ]; then
+    warn "README.md not found; skipping documented host version check"
+    return 0
+  fi
+
+  local dev_pca
+  dev_pca=$(jget "d.get('devDependencies', {}).get('@earendil-works/pi-coding-agent')" "${PACKAGE_JSON}")
+  [ -z "${dev_pca}" ] && return 0
+  local pin="${dev_pca#\^}"
+  pin="${pin#\~}"
+  pin="${pin#=}"
+
+  # Badge: "PI%20Agent-vX.Y.Z" (URL-escaped space in a shields.io badge label).
+  local badge
+  badge=$(grep -o 'PI%20Agent-v[0-9][0-9.]*' "${readme}" 2> /dev/null | head -1 | sed 's/.*-v//')
+  if [ -n "${badge}" ] && [ "${badge}" != "${pin}" ]; then
+    error "README badge says Pi Agent v${badge}, devDependencies pins ${pin}"
+    error "update the badge to v${pin} (tested host version)"
+    violations=$((violations + 1))
+  fi
+
+  # Prerequisites: "pi-coding-agent`) X.Y.Z+"
+  local prereq
+  prereq=$(grep -o 'pi-coding-agent`) *[0-9][0-9.]*+' "${readme}" 2> /dev/null | head -1 | grep -o '[0-9][0-9.]*' | tr -d '+')
+  if [ -n "${prereq}" ] && [ "${prereq}" != "${pin}" ]; then
+    error "README prerequisite says Pi ${prereq}+, devDependencies pins ${pin}"
+    error "the minimum supported host must match the version we test against"
+    violations=$((violations + 1))
+  fi
+
+  if [ "${violations}" -eq 0 ]; then
+    log "docs check: PASS — README host version matches devDependencies (${pin})"
+    return 0
+  fi
+  return 1
+}
+
 # --- check 2: version drift (advisory) --------------------------------------
 
 check_drift() {
@@ -250,17 +295,26 @@ manifest_status=0
 check_manifest || manifest_status=1
 
 echo ""
+docs_status=0
+check_docs || docs_status=1
+
+echo ""
 drift_status=0
 check_drift || drift_status=1
 
 echo ""
-if [ "${manifest_status}" -eq 0 ] && [ "${drift_status}" -eq 0 ]; then
+if [ "${manifest_status}" -eq 0 ] && [ "${docs_status}" -eq 0 ] && [ "${drift_status}" -eq 0 ]; then
   log "all checks passed"
   exit 0
 fi
 
 if [ "${manifest_status}" -ne 0 ]; then
   error "manifest check FAILED (blocking)"
+  exit 1
+fi
+
+if [ "${docs_status}" -ne 0 ]; then
+  error "docs check FAILED (blocking)"
   exit 1
 fi
 
