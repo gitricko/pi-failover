@@ -11,7 +11,7 @@ This is **not** a post-run recovery tool. It is a transport-level, request-time 
 [![PI Agent](https://img.shields.io/badge/PI%20Agent-v1.0.0-green?logo=github)](https://pi.dev)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 <a href="https://github.com/gitricko/.minions/actions/workflows/ci.yml">
-    <img src="https://github.com/gitricko/.minions/actions/workflows/ci.yml/badge.svg" alt="Latest CI Status">
+    <img src="https://github.com/gitricko/pi-failover/actions/workflows/ci.yml/badge.svg" alt="Latest CI Status">
 </a>
 
 </p>
