@@ -8,7 +8,7 @@ This is **not** a post-run recovery tool. It is a transport-level, request-time 
 
 <p align="center">
 
-[![PI Agent](https://img.shields.io/badge/PI%20Agent-v1.0.0-green?logo=github)](https://pi.dev)
+[![PI Agent](https://img.shields.io/badge/PI%20Agent-v1.0.2-green?logo=github)](https://pi.dev)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 <a href="https://github.com/gitricko/.minions/actions/workflows/ci.yml">
     <img src="https://github.com/gitricko/pi-failover/actions/workflows/ci.yml/badge.svg" alt="Latest CI Status">
@@ -104,7 +104,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the complete algorithm, t
 ### Prerequisites
 
 - Node.js ≥ 22.19.0
-- Pi CLI (`@earendil-works/pi-coding-agent`) 1.0.0+
+- Pi CLI (`@earendil-works/pi-coding-agent`) 1.0.2+
 
 ### Install dependencies
 
