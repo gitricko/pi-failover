@@ -128,16 +128,16 @@ jobs:
           ./scripts/integration-test.sh
 
   drift:
-    name: Host version drift (advisory)
+    name: Host version drift
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7.0.1
 
       - name: Report pi version drift
-        # Advisory only: reports how far devDependencies is behind the latest
-        # published host version. Never blocks a PR.
-        run: ./scripts/check-pi-version.sh
+        # Fails if devDependencies is behind the latest published host version.
+        # This ensures dependabot PRs are merged promptly and the tested host
+        # version stays current.
+        run: ./scripts/check-pi-version.sh --strict
 
   nightly-latest:
     name: Nightly Check Against Latest pi
