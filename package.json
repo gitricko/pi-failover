@@ -29,12 +29,12 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^1.0.4",
-    "@earendil-works/pi-coding-agent": "^1.0.4",
+    "@earendil-works/pi-ai": "^1.2.0",
+    "@earendil-works/pi-coding-agent": "^1.2.0",
     "@types/node": "^26.6.4",
-    "shx": "^0.4.0",
+    "shx": "^0.3.4",
     "typescript": "^7.0.2",
-    "vite": "^8.3.2",
+    "vite": "^8.3.3",
     "vitest": "^5.0.3"
   },
   "engines": {
